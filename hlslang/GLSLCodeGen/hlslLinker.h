@@ -56,7 +56,7 @@ public:
 	
    TInfoSink& getInfoSink() { return infoSink; }
 
-   bool link(HlslCrossCompiler*, const char* entry, bool usePrecision);
+   bool link(HlslCrossCompiler*, const char* entry, bool usePrecision, bool outputFogCoord);
 
    std::string stripSemanticModifier(const std::string &semantic, bool bWarn);
 

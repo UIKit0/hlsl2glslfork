@@ -514,7 +514,7 @@ static void EmitOutputAssignment(std::stringstream& out, const std::string& name
 	out << ");\n";
 }
 
-bool HlslLinker::link(HlslCrossCompiler* compiler, const char* entryFunc, bool usePrecision)
+bool HlslLinker::link(HlslCrossCompiler* compiler, const char* entryFunc, bool usePrecision, bool outputFogCoord)
 {
 	std::vector<GlslFunction*> globalList;
 	std::vector<GlslFunction*> functionList;
@@ -1131,6 +1131,12 @@ bool HlslLinker::link(HlslCrossCompiler* compiler, const char* entryFunc, bool u
 				// If no return type, close off the output
 				postamble << ";\n";
 			}
+		}
+
+		if (lang == EShLangVertex && outputFogCoord)
+		{
+			// mirror D3D behavior of computing fog factor from oPos.w
+			postamble << "    gl_FogFragCoord = gl_Position.w;\n";
 		}
 
 		postamble << "}\n\n";

@@ -310,7 +310,7 @@ int C_DECL Hlsl2Glsl_Translate( const ShHandle handle, const char* entry, int op
 		return 0;
 	}
 
-   bool ret = compiler->GetLinker()->link(compiler, entry, (options & ETranslateOpUsePrecision) ? true : false);
+   bool ret = compiler->GetLinker()->link(compiler, entry, (options & ETranslateOpUsePrecision) ? true : false, (options & ETranslateOpOutputFogCoord) ? true : false);
 
    return ret ? 1 : 0;
 }
