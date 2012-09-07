@@ -497,7 +497,22 @@ static const char* GetEntryName (const char* entryFunc)
 
 static const char* kShaderTypeNames[2] = { "Vertex", "Fragment" };
 
+static void EmitOutputAssignment(std::stringstream& out, const std::string& name, const std::string& ctor, const std::string& source, int pad, EShLanguage lang)
+{
+	out << "    " << name << " = ";
+	out << ctor << "( " << source;
 
+	for (int i = 0; i < pad; ++i)
+	{
+		// last component of every fixed function vertex output should be 1.0 because of homogeneous divide / projective texturing
+		if (i + 1 == pad && lang == EShLangVertex && name.compare(0, 3, "gl_") == 0)
+			out << ", 1.0";
+		else
+			out << ", 0.0";
+	}
+
+	out << ");\n";
+}
 
 bool HlslLinker::link(HlslCrossCompiler* compiler, const char* entryFunc, bool usePrecision)
 {
@@ -960,12 +975,7 @@ bool HlslLinker::link(HlslCrossCompiler* compiler, const char* entryFunc, bool u
 
 						call << "xlt_" << sym->getName();
 
-						postamble << "    ";
-						postamble << name << " = " << ctor << "( xlt_" <<sym->getName();
-						for (int ii = 0; ii<pad; ii++)
-							postamble << ", 0.0";
-
-						postamble << ");\n";
+						EmitOutputAssignment(postamble, name, ctor, "xlt_" + sym->getName(), pad, lang);
 					}
 					else
 					{
@@ -1001,13 +1011,7 @@ bool HlslLinker::link(HlslCrossCompiler* compiler, const char* entryFunc, bool u
 
 						if ( getArgumentData2( current.name, current.semantic, current.type, lang==EShLangVertex ? EClassVarOut : EClassRes, name, ctor, pad, 0) )
 						{
-							postamble << "    ";
-							postamble << name << " = " << ctor;
-							postamble << "( " << tempVar << "." << current.name;
-							for (int ii = 0; ii<pad; ii++)
-								postamble << ", 0.0";
-
-							postamble << ");\n";
+							EmitOutputAssignment(postamble, name, ctor, tempVar + "." + current.name, pad, lang);
 
 							if (lang == EShLangVertex) // deal with varyings
 							{
@@ -1057,13 +1061,7 @@ bool HlslLinker::link(HlslCrossCompiler* compiler, const char* entryFunc, bool u
 				if ( getArgumentData2( "", funcMain->getSemantic(), retType, lang==EShLangVertex ? EClassVarOut : EClassRes,
 					name, ctor, pad, 0) )
 				{
-
-					postamble << "    ";
-					postamble << name << " = " << ctor << "( xl_retval";
-					for (int ii = 0; ii<pad; ii++)
-						postamble << ", 0.0";
-
-					postamble << ");\n";
+					EmitOutputAssignment(postamble, name, ctor, "xl_retval", pad, lang);
 
 					if (lang == EShLangVertex) // deal with varyings
 					{
@@ -1104,18 +1102,10 @@ bool HlslLinker::link(HlslCrossCompiler* compiler, const char* entryFunc, bool u
 
 						if ( getArgumentData2( current.name, current.semantic, current.type, lang==EShLangVertex ? EClassVarOut : EClassRes, name, ctor, pad, arrayIndex) )
 						{
-							postamble << "    ";
-							postamble << name;                                                            
-							postamble << " = " << ctor;
-							postamble << "( xl_retval." << current.name;
-							if ( bIsArray )
-							{
-								postamble << "[" << arrayIndex << "]";
-							}
-							for (int ii = 0; ii<pad; ii++)
-								postamble << ", 0.0";
+							char arrayAccessor[32];
+							sprintf(arrayAccessor, bIsArray ? "[%d]" : "", arrayIndex);
 
-							postamble << ");\n";
+							EmitOutputAssignment(postamble, name, ctor, "xl_retval." + current.name + arrayAccessor, pad, lang);
 
 							if (lang == EShLangVertex) // deal with varyings
 							{
