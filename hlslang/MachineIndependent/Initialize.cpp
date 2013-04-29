@@ -13,6 +13,18 @@
 #include "Initialize.h"
 
 #include "SymbolTable.h"
+#include <sstream>
+
+static void appendMatrixType(std::stringstream& ss, unsigned rows, unsigned cols)
+{
+    ss << "float";
+    if (rows > 1 && cols > 1)
+        ss << rows << "x" << cols;
+    else if (cols > 1)
+        ss << cols;
+    else if (rows > 1)
+        ss << rows;
+}
 
 void TBuiltIns::initialize()
 {
@@ -92,7 +104,7 @@ void TBuiltIns::initialize()
       s.append(TString("float3x3  acos(float3x3  x);"));
       s.append(TString("float4x4  acos(float4x4  x);"));
 
-      s.append(TString("float atan2(float y, float x);"));
+      s.append(TString("float atan2(float y, float x);")); 
       s.append(TString("float2  atan2(float2  y, float2  x);"));
       s.append(TString("float3  atan2(float3  y, float3  x);"));
       s.append(TString("float4  atan2(float4  y, float4  x);"));
@@ -376,21 +388,43 @@ void TBuiltIns::initialize()
       //
       // HLSL Matrix Functions.
       //
-      s.append(TString("float2x2 mul(float2x2 x, float2x2 y);"));
-      s.append(TString("float3x3 mul(float3x3 x, float3x3 y);"));
-      s.append(TString("float4x4 mul(float4x4 x, float4x4 y);"));
-      s.append(TString("float2 mul(float2 x, float2x2 y);"));
-      s.append(TString("float3 mul(float3 x, float3x3 y);"));
-      s.append(TString("float4 mul(float4 x, float4x4 y);"));
-      s.append(TString("float2 mul(float2x2 x, float2 y);"));
-      s.append(TString("float3 mul(float3x3 x, float3 y);"));
-      s.append(TString("float4 mul(float4x4 x, float4 y);"));
+
+      for (unsigned cols = 2; cols <= 4; ++cols)
+      {
+          for (unsigned rows = 1; rows <= 4; ++rows)
+          {
+              std::stringstream ss;
+              appendMatrixType(ss, rows, cols);
+              ss << " mul(float x, ";
+              appendMatrixType(ss, rows, cols);
+              ss << " y);";
+
+              appendMatrixType(ss, rows, cols);
+              ss << " mul(";
+              appendMatrixType(ss, rows, cols);
+              ss << " x, float y);";
+              for (unsigned othercols = 1; othercols <= 4; ++othercols)
+              {
+                  // matrix<rows, othercols> mul(matrix<rows, cols>, matrix<cols, othercols>)
+
+                  appendMatrixType(ss, rows, othercols);
+                  ss << " mul(";
+                  appendMatrixType(ss, rows, cols);
+                  ss << " x, ";
+                  appendMatrixType(ss, cols, othercols);
+                  ss << " y);";
+              }
+              s.append(TString(ss.str().c_str()));
+          }
+      }
+
       s.append(TString("float2x2 transpose(float2x2 m);"));
       s.append(TString("float3x3 transpose(float3x3 m);"));
       s.append(TString("float4x4 transpose(float4x4 m);"));
       s.append(TString("float determinant(float2x2 m);"));
       s.append(TString("float determinant(float3x3 m);"));
       s.append(TString("float determinant(float4x4 m);"));
+      s.append(TString("float2x2 mul(float2x2 x, float2x2 y);"));
 
       //
       // Vector relational functions.
@@ -415,15 +449,19 @@ void TBuiltIns::initialize()
 
       //DX HLSL texture functions
       s.append(TString("float4 tex1D(sampler1D s, float coord);"));
+      s.append(TString("float4 tex1D(sampler1DShadow s, float2 coord);"));
       s.append(TString("float4 tex1D(sampler1D s, float coord, float ddx, float ddy);"));
       s.append(TString("float4 tex1Dproj(sampler1D s, float4 coord);"));
+      s.append(TString("float4 tex1Dproj(sampler1DShadow s, float4 coord);"));
       s.append(TString("float4 tex1Dbias(sampler1D s, float4 coord);"));
       s.append(TString("float4 tex1Dlod(sampler1D s, float4 coord);"));
       s.append(TString("float4 tex1Dgrad(sampler1D s, float coord, float ddx, float ddy);"));
 
       s.append(TString("float4 tex2D(sampler2D s, float2 coord);"));
+      s.append(TString("float4 tex2D(sampler2DShadow s, float3 coord);"));
       s.append(TString("float4 tex2D(sampler2D s, float2 coord, float2 ddx, float2 ddy);"));
       s.append(TString("float4 tex2Dproj(sampler2D s, float4 coord);"));
+	  s.append(TString("float4 tex2Dproj(sampler2DShadow s, float4 coord);"));
       s.append(TString("float4 tex2Dbias(sampler2D s, float4 coord);"));
       s.append(TString("float4 tex2Dlod(sampler2D s, float4 coord);"));
       s.append(TString("float4 tex2Dgrad(sampler2D s, float2 coord2, float2 ddx, float2 ddy);"));
@@ -442,12 +480,14 @@ void TBuiltIns::initialize()
       s.append(TString("float4 texCUBElod(samplerCUBE s, float4 coord);"));
       s.append(TString("float4 texCUBEgrad(samplerCUBE s, float3 coord, float3 ddx, float3 ddy);"));
 	   
-		s.append(TString("float4 texRECT(samplerRECT s, float2 coord);"));
-		s.append(TString("float4 texRECTproj(samplerRECT s, float4 coord);"));
-		s.append(TString("float4 texRECTproj(samplerRECT s, float3 coord);"));
+      s.append(TString("float4 texRECT(samplerRECT s, float2 coord);"));
+      s.append(TString("float4 texRECT(samplerRECTShadow s, float3 coord);"));
+      s.append(TString("float4 texRECTproj(samplerRECT s, float4 coord);"));
+      s.append(TString("float4 texRECTproj(samplerRECTShadow s, float4 coord);"));
+      s.append(TString("float4 texRECTproj(samplerRECT s, float3 coord);"));
 	   
-		s.append(TString("float shadow2D(sampler2Dshadow s, float3 coord);"));
-		s.append(TString("float shadow2Dproj(sampler2Dshadow s, float4 coord);"));
+		s.append(TString("float shadow2D(sampler2DShadow s, float3 coord);"));
+		s.append(TString("float shadow2Dproj(sampler2DShadow s, float4 coord);"));
 	   
       s.append(TString("float4 tex1D(sampler s, float coord);"));
       s.append(TString("float4 tex1D(sampler s, float coord, float ddx, float ddy);"));

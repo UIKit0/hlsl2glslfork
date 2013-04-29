@@ -22,15 +22,23 @@ const char typeString[EgstTypeCount][32] =
    "vec3",
    "vec4",
    "mat2",
+   "mat2x3",
+   "mat2x4",
+   "mat3x2",
    "mat3",
+   "mat3x4",
+   "mat4x2",
+   "mat4x3",
    "mat4",
    "sampler",
    "sampler1D",
+   "sampler1DShadow",
    "sampler2D",
+   "sampler2DShadow",
    "sampler3D",
    "samplerCube",
    "sampler2DRect",
-   "sampler2DShadow",
+   "sampler2DRectShadow",
    "struct"
 };
 
@@ -73,15 +81,23 @@ void writeType (std::stringstream &out, EGlslSymbolType type, GlslStruct *s, TPr
    case EgstFloat3:
    case EgstFloat4:
    case EgstFloat2x2:
+   case EgstFloat2x3:
+   case EgstFloat2x4:
+   case EgstFloat3x2:
    case EgstFloat3x3:
+   case EgstFloat3x4:
+   case EgstFloat4x2:
+   case EgstFloat4x3:
    case EgstFloat4x4:
    case EgstSamplerGeneric: 
    case EgstSampler1D:
+   case EgstSampler1DShadow:
    case EgstSampler2D:
+   case EgstSampler2DShadow:
    case EgstSampler3D:
    case EgstSamplerCube:
    case EgstSamplerRect:
-   case EgstSampler2DShadow:
+   case EgstSamplerRectShadow:
       out << typeString[type];
       break;
    case EgstStruct:
@@ -90,6 +106,8 @@ void writeType (std::stringstream &out, EGlslSymbolType type, GlslStruct *s, TPr
       else
          out << "struct";
       break;
+	case EgstTypeCount:
+		break;
    }
 }
 
@@ -105,11 +123,29 @@ EGlslSymbolType translateType( const TType *type )
 {
    if ( type->isMatrix() )
    {
-      switch (type->getNominalSize())
+      switch (type->getColsCount())
       {
-      case 2:  return EgstFloat2x2;
-      case 3:  return EgstFloat3x3;
-      case 4:  return EgstFloat4x4;
+      case 2:
+          switch (type->getRowsCount())
+          {
+          case 2:  return EgstFloat2x2;
+          case 3:  return EgstFloat2x3;
+          case 4:  return EgstFloat2x4;
+          } break;
+      case 3:
+          switch (type->getRowsCount())
+          {
+          case 2:  return EgstFloat3x2;
+          case 3:  return EgstFloat3x3;
+          case 4:  return EgstFloat3x4;
+          } break;
+      case 4:
+          switch (type->getRowsCount())
+          {
+          case 2:  return EgstFloat4x2;
+          case 3:  return EgstFloat4x3;
+          case 4:  return EgstFloat4x4;
+          } break;
       }
    }
    else
@@ -119,27 +155,33 @@ EGlslSymbolType translateType( const TType *type )
       case EbtVoid:
          return EgstVoid;
       case EbtBool:
-         return EGlslSymbolType(EgstBool + (type->getNominalSize() - 1));
+         return EGlslSymbolType(EgstBool + (type->getRowsCount() - 1));
       case EbtInt:
-         return EGlslSymbolType(EgstInt + (type->getNominalSize() - 1));
+         return EGlslSymbolType(EgstInt + (type->getRowsCount() - 1));
       case EbtFloat:
-         return EGlslSymbolType(EgstFloat + (type->getNominalSize() - 1));
+         return EGlslSymbolType(EgstFloat + (type->getRowsCount() - 1));
       case EbtSamplerGeneric:
          return EgstSamplerGeneric;
       case EbtSampler1D:
          return EgstSampler1D;
+	  case EbtSampler1DShadow:
+		  return EgstSampler1DShadow;
       case EbtSampler2D:
          return EgstSampler2D;
+	  case EbtSampler2DShadow:
+		  return EgstSampler2DShadow;
       case EbtSampler3D:
          return EgstSampler3D;
       case EbtSamplerCube:
          return EgstSamplerCube;
 	  case EbtSamplerRect:
 		  return EgstSamplerRect;
-	  case EbtSampler2DShadow:
-		  return EgstSampler2DShadow;
+	  case EbtSamplerRectShadow:
+		  return EgstSamplerRectShadow;
       case EbtStruct:
          return EgstStruct;
+      default:
+         return EgstVoid;
       }
    }
 
@@ -155,32 +197,11 @@ EGlslQualifier translateQualifier( TQualifier qual )
    case EvqGlobal:        return EqtNone;
    case EvqConst:         return EqtConst;
    case EvqAttribute:     return EqtNone;
-   case EvqVaryingIn:     return EqtNone;
-   case EvqVaryingOut:    return EqtNone;
    case EvqUniform:       return EqtUniform;
    case EvqMutableUniform: return EqtMutableUniform;
-
-
-      // parameters
    case EvqIn:            return EqtIn;
    case EvqOut:           return EqtOut;
    case EvqInOut:         return EqtInOut;
-   case EvqConstReadOnly: return EqtConst;
-
-      // built-ins written by vertex shader
-   case EvqPosition:      return EqtNone;
-   case EvqPointSize:     return EqtNone;
-   case EvqClipVertex:    return EqtNone;
-
-      // built-ins read by fragment shader
-   case EvqFace:          return EqtNone;
-   case EvqFragCoord:     return EqtNone;
-
-      // built-ins written by fragment shader
-   case EvqFragColor:     return EqtNone;
-   case EvqFragDepth:     return EqtNone;
-
+   default: return EqtNone;
    }
-
-   return EqtNone;
 }

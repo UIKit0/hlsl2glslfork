@@ -38,44 +38,55 @@ inline TTypeList* NewPoolTTypeList()
 class TPublicType
 {
 public:
-   TBasicType type;
-   TQualifier qualifier;
-   TPrecision precision;
-   int size;          // size of vector or matrix, not size of array
-   bool matrix;
-   bool array;
-   int arraySize;
-   TType* userDef;
-   TSourceLoc line;
+	TBasicType type;
+	TQualifier qualifier;
+	TPrecision precision;
+	int matcols;
+    int matrows;
+	bool matrix;
+	bool array;
+	int arraySize;
+	TType* userDef;
+	TSourceLoc line;
 
-   void setBasic(TBasicType bt, TQualifier q, const TSourceLoc& ln = gNullSourceLoc) 
-   {
-      type = bt;
-      qualifier = q;
-	  precision = EbpUndefined;
-      size = 1;
-      matrix = false;
-      array = false;
-      arraySize = 0;
-      userDef = 0;
-      line = ln;
-   }
+	void setBasic(TBasicType bt, TQualifier q, const TSourceLoc& ln = gNullSourceLoc)
+	{
+		type = bt;
+		qualifier = q;
+		precision = EbpUndefined;
+		matcols = 1;
+		matrows = 1;
+		matrix = false;
+		array = false;
+		arraySize = 0;
+		userDef = 0;
+		line = ln;
+	}
 
-   void setAggregate(int s, bool m = false)
-   {
-      size = s;
-      matrix = m;
-   }
+	void setVector(int s)
+	{
+		matcols = 1;
+		matrows = s;
+		matrix = false;
+	}
 
-   void setArray(bool a, int s = 0)
-   {
-      array = a;
-      arraySize = s;
-   }
+	void setMatrix(int columns, int rows)
+	{
+		matcols = columns;
+		matrows = rows;
+		matrix = true;
+	}
+
+	void setArray(bool a, int s = 0)
+	{
+		array = a;
+		arraySize = s;
+	}
 };
 
 typedef std::map<TTypeList*, TTypeList*> TStructureMap;
-typedef std::map<TTypeList*, TTypeList*>::iterator TStructureMapIterator;
+
+
 //
 // Base class for things that have a type.
 //
@@ -95,16 +106,17 @@ public:
    POOL_ALLOCATOR_NEW_DELETE(GlobalPoolAllocator)
 
    explicit TType() { }
-   explicit TType(TBasicType t, TPrecision p, TQualifier q = EvqTemporary, int s = 1, bool m = false, bool a = false) :
-      type(t), precision(p), qualifier(q), size(s), line(gNullSourceLoc), matrix(m), array(a), arraySize(0),
+   explicit TType(TBasicType t, TPrecision p, TQualifier q = EvqTemporary, int cols = 1, int rows = 1, bool m = false, bool a = false) :
+      type(t), precision(p), qualifier(q), matcols(cols), matrows(rows), line(gNullSourceLoc), matrix(m), array(a), arraySize(0),
       structure(0), structureSize(0), maxArraySize(0), arrayInformationType(0), fieldName(0), mangled(0), typeName(0),
       semantic(0)
    {
+      checkInvariants();
    }
    explicit TType(const TPublicType &p) :
-      type(p.type), precision(p.precision), qualifier(p.qualifier), size(p.size), line(p.line), matrix(p.matrix), array(p.array), arraySize(p.arraySize), 
-      structure(0), structureSize(0), maxArraySize(0), arrayInformationType(0), fieldName(0), mangled(0), typeName(0),
-      semantic(0)
+      type(p.type), precision(p.precision), qualifier(p.qualifier), matrows(p.matrows), matcols(p.matcols), line(p.line), matrix(p.matrix),
+      array(p.array), arraySize(p.arraySize), structure(0), structureSize(0), maxArraySize(0),
+      arrayInformationType(0), fieldName(0), mangled(0), typeName(0), semantic(0)
    {
       if (p.userDef)
       {
@@ -112,28 +124,31 @@ public:
 		  line = p.userDef->line;
          typeName = NewPoolTString(p.userDef->getTypeName().c_str());
       }
+      checkInvariants();
    }
    explicit TType(TTypeList* userDef, const TString& n, TPrecision p = EbpUndefined, const TSourceLoc& l = gNullSourceLoc) :
-      type(EbtStruct), precision(p), qualifier(EvqTemporary), size(1), line(l), matrix(false), array(false), arraySize(0),
+      type(EbtStruct), precision(p), qualifier(EvqTemporary), matrows(1), matcols(1), line(l), matrix(false), array(false), arraySize(0),
       structure(userDef), maxArraySize(0), arrayInformationType(0), fieldName(0), mangled(0), semantic(0)
    {
       typeName = NewPoolTString(n.c_str());
+      checkInvariants();
    }
 
-   TType(const TType& type) { *this = type; }
+   TType(const TType& t) { *this = t; checkInvariants(); }
 
    void copyType(const TType& copyOf, TStructureMap& remapper)
    {
       type = copyOf.type;
 	  precision = copyOf.precision;
       qualifier = copyOf.qualifier;
-      size = copyOf.size;
+      matrows = copyOf.matrows;
+      matcols = copyOf.matcols;
       matrix = copyOf.matrix;
       array = copyOf.array;
       arraySize = copyOf.arraySize;
 	   line = copyOf.line;
 
-      TStructureMapIterator iter;
+      TStructureMap::iterator iter;
       if (copyOf.structure)
       {
          if ((iter = remapper.find(structure)) == remapper.end())
@@ -174,6 +189,8 @@ public:
       maxArraySize = copyOf.maxArraySize;
       assert(copyOf.arrayInformationType == 0);
       arrayInformationType = 0; // arrayInformationType should not be set for builtIn symbol table level
+
+      checkInvariants();
    }
 
    TType* clone(TStructureMap& remapper)
@@ -184,6 +201,20 @@ public:
       return newType;
    }
 
+   void setType(TBasicType t, int cols, int rows, bool m, bool a, int aS = 0)
+   {
+      type = t; matcols = cols; matrows = rows; matrix = m; array = a; arraySize = aS;
+   }
+   void setType(TBasicType t, int cols, int rows, bool m, TType* userDef = 0)
+   {
+      type = t; 
+      matcols = cols; 
+      matrows = rows; 
+      matrix = m; 
+      if (userDef)
+         structure = userDef->getStruct();
+      // leave array information intact.
+   }
    void setTypeName(const TString& n)
    {
       typeName = NewPoolTString(n.c_str());
@@ -213,22 +244,32 @@ public:
    void setPrecision(TPrecision p) { precision = p; }
    void changeQualifier(TQualifier q) { qualifier = q; }
 
-   // One-dimensional size of single instance type
-   int getNominalSize() const { return size; }  
-   void setNominalSize(int s) { size = s; }
+   int getColsCount() const { return matcols; }
+   void setColsCount(int count) { matcols = count; }
+
+   int getRowsCount() const { return matrows; }
+   void setRowsCount(int count) { matrows = count; }
 
    // Full-dimensional size of single instance of type
-   int getInstanceSize() const  
+   int getInstanceSize() const
    {
       if (matrix)
-         return size * size;
+         return matrows * matcols;
       else
-         return size;
+      {
+          assert(matcols == 1);
+          return matrows;
+      }
+   }
+
+   bool isScalar() const
+   {
+       return !isMatrix() && !isArray() && !isVector();
    }
 
    bool isMatrix() const { return matrix ? true : false; }
    void setMatrix(bool m) { matrix = m; }
-
+   void setArray(bool is_array) { array = is_array; }
    bool isArray() const { return array ? true : false; }
    int getArraySize() const { return arraySize; }
    void setArraySize(int s) { array = true; arraySize = s; }
@@ -237,7 +278,7 @@ public:
    void clearArrayness() { array = false; arraySize = 0; maxArraySize = 0; }
    void setArrayInformationType(TType* t) { arrayInformationType = t; }
    TType* getArrayInformationType() { return arrayInformationType; }
-   bool isVector() const { return size > 1 && !matrix; }
+   bool isVector() const { return matrows > 1 && !matrix; }
    static const char* getBasicString(TBasicType t)
    {
       switch (t)
@@ -260,7 +301,7 @@ public:
    }
    TTypeList* getStruct() const { return structure; }
    void setStruct(TTypeList* s) { structure = s; }
-
+	
    int getObjectSize() const
    {
       int totalSize;
@@ -268,9 +309,9 @@ public:
       if (getBasicType() == EbtStruct)
          totalSize = getStructSize();
       else if (matrix)
-         totalSize = size * size;
+         totalSize = matrows * matcols;
       else
-         totalSize = size;
+         totalSize = matrows;
 
       if (isArray())
          totalSize *= Max(getArraySize(), getMaxArraySize());
@@ -291,15 +332,17 @@ public:
    }
    bool sameElementType(const TType& right) const
    {
-      return      type == right.type   &&
-      size == right.size   &&
+      return      type == right.type &&
+      matrows == right.matrows &&
+      matcols == right.matcols &&
       matrix == right.matrix &&
       structure == right.structure;
    }
    bool operator==(const TType& right) const
    {
       return      type == right.type   &&
-      size == right.size   &&
+      matrows == right.matrows &&
+      matcols == right.matcols &&
       matrix == right.matrix &&
       array == right.array  && (!array || arraySize == right.arraySize) &&
       structure == right.structure;
@@ -317,7 +360,21 @@ public:
    void setSemantic( const TString &s) { semantic = NewPoolTString(s.c_str()); }
    bool hasSemantic() const { return semantic != 0; }
 
-   void buildMangledName(TString& res) const;
+   void checkInvariants() const
+   {
+       if (matrix)
+       {
+           assert(matcols >= 2 && matcols <= 4);
+           assert(matrows >= 2 && matrows <= 4);
+       }
+       else
+       {
+           assert(matcols == 1);
+           assert(matrows >= 1 && matrows <= 4);
+       }
+   }
+
+   void buildMangledName(TString&) const;
 
    // Determine the parameter compatibility between this type and the parameter type
    ECompatibility determineCompatibility ( const TType *pType ) const;
@@ -328,7 +385,8 @@ private:
    TPrecision precision;
    TBasicType type      : 6;
    TQualifier qualifier : 7;
-   int size             : 8; // size of vector or matrix, not size of array
+   int matrows          : 8;
+   int matcols          : 8;
    unsigned int matrix  : 1;
    unsigned int array   : 1;
    int arraySize;
@@ -344,65 +402,42 @@ private:
    TString *semantic; //for semantics on structure fields
 };
 
-//
-// Class to hold Annotation
-//
+
 class TAnnotation
 {
 public:
-   POOL_ALLOCATOR_NEW_DELETE(GlobalPoolAllocator)
-   TAnnotation()
-   {
-   }
-   virtual ~TAnnotation()
-   {
-   }
+	POOL_ALLOCATOR_NEW_DELETE(GlobalPoolAllocator)
+	TAnnotation() { }
 
-   size_t getKeyCount() const
-   {
-      return keys.size();
-   }
-   const TString& getKey( int i) const
-   {
-      return keys[i];
-   }
-   void addKey( const TString& key)
-   {
-      keys.push_back(key);
-   }
+	size_t getKeyCount() const { return keys.size(); }
+	const TString& getKey(size_t i) const { return keys[i]; }
+	void addKey(const TString& key) { keys.push_back(key); }
 
-protected:
-
-   TVector<TString> keys;
+private:
+	TVector<TString> keys;
 };
 
-//
-// Class for extended type information
-//
+
+
 class TTypeInfo
 {
 public:
-   POOL_ALLOCATOR_NEW_DELETE(GlobalPoolAllocator)
-   TTypeInfo( const TString &s, TAnnotation *ann) : semantic(s), annotation(ann)
-   {
-   }
-   virtual ~TTypeInfo() { } //deallocation should be handled by the pool
+	POOL_ALLOCATOR_NEW_DELETE(GlobalPoolAllocator)
+	TTypeInfo( const TString &s, TAnnotation *ann) : semantic(s), annotation(ann)
+	{
+	}
+	~TTypeInfo() { } // deallocation should be handled by the pool
 
-   const TString& getSemantic() const { return semantic; }
-   const TAnnotation* getAnnotation() const
-   {
-      return annotation;
-   }
+	const TString& getSemantic() const { return semantic; }
+	const TAnnotation* getAnnotation() const { return annotation; }
 
-protected:
-   //forbid these
-   TTypeInfo() { }
-   TTypeInfo( const TTypeInfo &) { }
+private:
+	// forbid copying
+	TTypeInfo();
+	TTypeInfo(const TTypeInfo &);
 
-   TString semantic;
-   TAnnotation *annotation;
-
+	TString semantic;
+	TAnnotation *annotation;
 };
 
 #endif // _TYPES_INCLUDED_
-

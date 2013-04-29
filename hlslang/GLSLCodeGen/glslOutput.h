@@ -18,50 +18,57 @@
 class TGlslOutputTraverser : public TIntermTraverser 
 {
 private:
-   static void traverseSymbol(TIntermSymbol*, TIntermTraverser*);
-   static void traverseParameterSymbol(TIntermSymbol *node, TIntermTraverser *it);
-   static void traverseConstantUnion(TIntermConstantUnion*, TIntermTraverser*);
-   static void traverseImmediateConstant( TIntermConstantUnion *node, TIntermTraverser *it);
-   static bool traverseBinary(bool preVisit, TIntermBinary*, TIntermTraverser*);
-   static bool traverseUnary(bool preVisit, TIntermUnary*, TIntermTraverser*);
-   static bool traverseSelection(bool preVisit, TIntermSelection*, TIntermTraverser*);
-   static bool traverseAggregate(bool preVisit, TIntermAggregate*, TIntermTraverser*);
-   static bool traverseLoop(bool preVisit, TIntermLoop*, TIntermTraverser*);
-   static bool traverseBranch(bool preVisit, TIntermBranch*,  TIntermTraverser*);
-	
+	static void traverseSymbol(TIntermSymbol*, TIntermTraverser*);
+	static void traverseParameterSymbol(TIntermSymbol *node, TIntermTraverser *it);
+	static void traverseConstant(TIntermConstant*, TIntermTraverser*);
+	static void traverseImmediateConstant( TIntermConstant *node, TIntermTraverser *it);
+	static bool traverseBinary(bool preVisit, TIntermBinary*, TIntermTraverser*);
+	static bool traverseUnary(bool preVisit, TIntermUnary*, TIntermTraverser*);
+	static bool traverseSelection(bool preVisit, TIntermSelection*, TIntermTraverser*);
+	static bool traverseAggregate(bool preVisit, TIntermAggregate*, TIntermTraverser*);
+	static bool traverseLoop(bool preVisit, TIntermLoop*, TIntermTraverser*);
+	static bool traverseBranch(bool preVisit, TIntermBranch*,  TIntermTraverser*);
+	static bool traverseDeclaration(bool preVisit, TIntermDeclaration*, TIntermTraverser*);
+
 	void outputLineDirective (const TSourceLoc& line);
+	void traverseArrayDeclarationWithInit(TIntermDeclaration* decl);
 
 public:
-   TGlslOutputTraverser (TInfoSink& i, std::vector<GlslFunction*> &funcList, std::vector<GlslStruct*> &sList, bool usePrecision);
-   GlslStruct *createStructFromType( TType *type );
-   bool parseInitializer( TIntermBinary *node );
+	TGlslOutputTraverser (TInfoSink& i, std::vector<GlslFunction*> &funcList, std::vector<GlslStruct*> &sList, std::stringstream& deferredArrayInit, ETargetVersion version, unsigned options);
+	GlslStruct *createStructFromType( TType *type );
+	
+	// Info Sink
+	TInfoSink& infoSink;
 
-   // Info Sink
-   TInfoSink& infoSink;
+	// Global function
+	GlslFunction *global;
 
-   // Global function
-   GlslFunction *global;
+	// Current function
+	GlslFunction *current;
 
-   // Current function
-   GlslFunction *current;
+	// Are we currently generating code?
+	bool generatingCode;
 
-   // Are we currently generating code?
-   bool generatingCode;
+	// List of functions
+	std::vector<GlslFunction*> &functionList;
 
-   // List of functions
-   std::vector<GlslFunction*> &functionList;
+	// List of structures
+	std::vector<GlslStruct*> &structList;
 
-   // List of structures
-   std::vector<GlslStruct*> &structList;
+	// Map of structure names to GLSL structures
+	std::map<std::string,GlslStruct*> structMap;
 
-   // Map of structure names to GLSL structures
-   std::map<std::string,GlslStruct*> structMap;
+	// Persistent data for collecting indices
+	std::vector<int> indexList;
+	
+	// Code to initialize global arrays when we can't use GLSL 1.20+ syntax
+	std::stringstream& m_DeferredArrayInit;
 
-   // Persistent data for collecting indices
-   std::vector<int> indexList;
-
-	bool m_UsePrecision;
 	TSourceLoc m_LastLineOutput;
+	unsigned swizzleAssignTempCounter;
+	ETargetVersion m_TargetVersion;
+	bool m_UsePrecision;
+	bool m_ArrayInitWorkaround;
 };
 
 #endif //GLSL_OUTPUT_H

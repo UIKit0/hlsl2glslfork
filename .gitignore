@@ -4,11 +4,17 @@
 *.ilk
 *.pbxuser
 *.perspectivev3
+*.xcworkspace
+xcuserdata
 *.cmake
 *.wwdb
 .svn/
 .DS_Store
+
 _ReSharper.*
+*.sdf
+*.opensdf
+
 CMakeFiles/
 CMakeCache.txt
 Makefile

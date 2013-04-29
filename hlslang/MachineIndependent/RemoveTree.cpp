@@ -37,18 +37,21 @@ static bool RemoveSelection(bool  /*preVisit*/ , TIntermSelection* node, TInterm
    return true;
 }
 
-static void RemoveConstantUnion(TIntermConstantUnion* node, TIntermTraverser*)
+static void RemoveConstant(TIntermConstant* node, TIntermTraverser*)
 {
    delete node;
 }
 
-void RemoveAllTreeNodes(TIntermNode* root)
+void ir_remove_tree(TIntermNode* root)
 {
+	if (!root)
+		return;
+	
    TIntermTraverser it;
 
    it.visitAggregate     = RemoveAggregate;
    it.visitBinary        = RemoveBinary;
-   it.visitConstantUnion = RemoveConstantUnion;
+   it.visitConstant = RemoveConstant;
    it.visitSelection     = RemoveSelection;
    it.visitSymbol        = RemoveSymbol;
    it.visitUnary         = RemoveUnary;

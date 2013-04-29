@@ -24,7 +24,7 @@ public:
    TInfoSink& getInfoSink() { return infoSink; }
 
    void TransformAST (TIntermNode* root);
-   void ProduceGLSL (TIntermNode* root, bool usePrecision);
+   void ProduceGLSL (TIntermNode* root, ETargetVersion version, unsigned options);
    bool IsASTTransformed() const { return m_ASTTransformed; }
    bool IsGlslProduced() const { return m_GlslProduced; }
 
@@ -40,6 +40,7 @@ public:
 	TInfoSink infoSink;
 	std::vector<GlslFunction*> functionList;
 	std::vector<GlslStruct*> structList;
+	std::stringstream m_DeferredArrayInit;
 };
 
 #endif //HLSL_CROSS_COMPILER_H

@@ -6,7 +6,73 @@
 #include "glslOutput.h"
 
 #include <cstdlib>
+#include <cstring>
 
+#ifdef _WIN32
+	#define snprintf _snprintf
+#endif
+
+//ACS: some texture lookup types were deprecated after 1.20, and 1.40 won't accept them
+bool UsePost120TextureLookups(ETargetVersion targetVersion) {
+    if(targetVersion<ETargetVersionCount) {
+        return (targetVersion>ETargetGLSL_120); 
+    }
+    else {
+        return false;
+    }
+}
+
+void print_float (std::stringstream& out, float f)
+{
+	// Kind of roundabout way, but this is to satisfy two things:
+	// * MSVC and gcc-based compilers differ a bit in how they treat float
+	//   width/precision specifiers. Want to match for tests.
+	// * GLSL (early version at least) require floats to have ".0" or
+	//   exponential notation.
+	char tmp[64];
+	sprintf(tmp, "%.6g", f);
+
+	char* posE = NULL;
+	posE = strchr(tmp, 'e');
+	if (!posE)
+		posE = strchr(tmp, 'E');
+
+	#if _MSC_VER
+	// While gcc would print something like 1.0e+07, MSVC will print 1.0e+007 -
+	// only for exponential notation, it seems, will add one extra useless zero. Let's try to remove
+	// that so compiler output matches.
+	if (posE != NULL)
+	{
+		if((posE[1] == '+' || posE[1] == '-') && posE[2] == '0')
+		{
+			char* p = posE+2;
+			while (p[0])
+			{
+				p[0] = p[1];
+				++p;
+			}
+		}
+	}
+	#endif
+
+	out << tmp;
+
+	// need to append ".0"?
+	if (!strchr(tmp,'.') && (posE == NULL))
+		out << ".0";
+}
+
+
+bool isShadowSampler(TBasicType t) {
+	switch (t) {
+		case EbtSampler1DShadow:
+		case EbtSampler2DShadow:
+		case EbtSamplerRectShadow:
+			return true;
+		default:
+			return false;
+	}
+}
 
 int getElements( EGlslSymbolType t )
 {
@@ -30,71 +96,83 @@ int getElements( EGlslSymbolType t )
    case EgstFloat4:
    case EgstFloat2x2:
       return 4;
+   case EgstFloat2x3:
+      return 6;
+   case EgstFloat2x4:
+      return 8;
+   case EgstFloat3x2:
+      return 6;
    case EgstFloat3x3:
       return 9;
+   case EgstFloat3x4:
+      return 12;
+   case EgstFloat4x2:
+      return 8;
+   case EgstFloat4x3:
+      return 12;
    case EgstFloat4x4:
       return 16;
+   default:
+      return 0;
    }
+}
 
-   return 0;
+TString buildArrayConstructorString(const TType& type) {
+	std::stringstream constructor;
+	constructor << getTypeString(translateType(&type))
+				<< '[' << type.getArraySize() << ']';
+
+	return TString(constructor.str().c_str());
 }
 
 
-void writeConstantConstructor( std::stringstream& out, EGlslSymbolType t, TPrecision prec, constUnion *c, GlslStruct *str = 0 )
+void writeConstantConstructor( std::stringstream& out, EGlslSymbolType t, TPrecision prec, TIntermConstant *c, GlslStruct *structure = 0 )
 {
-   int elementCount = getElements(t);
-   bool construct = elementCount > 1 || str != 0;
+	unsigned n_elems = getElements(t);
+	bool construct = n_elems > 1 || structure != 0;
 
-   if (construct)
-   {
-      writeType (out, t, str, EbpUndefined);
-      out << "( ";
-   }
+	if (construct) {
+		writeType (out, t, structure, EbpUndefined);
+		out << "(";
+	}
+	
+	if (structure) {
+		// compound type
+		unsigned n_members = structure->memberCount();
+		for (unsigned i = 0; i != n_members; ++i) {
+			const GlslStruct::StructMember &m = structure->getMember(i);
+			if (construct && i > 0)
+				out << ", ";
+			writeConstantConstructor (out, m.type, m.precision, c);
+		}
+	} else {
+		// simple type
+		unsigned n_constants = c->getCount();
+		for (unsigned i = 0; i != n_elems; ++i) {
+			unsigned v = Min(i, n_constants - 1);
+			if (construct && i > 0)
+				out << ", ";
+			TBasicType basicType = c->getBasicType();
+			if (basicType == EbtStruct)
+			    basicType = c->getValue(v).type;
+			switch (basicType) {
+				case EbtBool:
+					out << (c->toBool(v) ? "true" : "false");
+					break;
+				case EbtInt:
+					out << c->toInt(v);
+					break;
+				case EbtFloat:
+					print_float(out, c->toFloat(v));
+					break;
+				default:
+					assert(0);
+			}
+		}
+	}
 
-   if ( str == 0)
-   {
-      // simple type
-      for (int ii = 0; ii<elementCount; ii++, c++)
-      {
-         if (construct && ii > 0)
-         {
-            out << ", ";
-         }
-
-         switch (c->getType())
-         {
-         case EbtBool:
-            out << (c->getBConst() ? "true" : "false");
-            break;
-         case EbtInt:
-            out << c->getIConst();
-            break;
-         case EbtFloat:
-            GlslSymbol::writeFloat(out, c->getFConst());
-            break;
-         default:
-            assert(0);
-         }
-      }
-   }
-   else
-   {
-      // compound type
-      for (int ii = 0; ii<str->memberCount(); ii++)
-      {
-         const GlslStruct::member &m = str->getMember(ii);
-
-         if (construct && ii > 0)
-            out << ", ";
-
-         writeConstantConstructor (out, m.type, m.precision, c);
-      }
-   }
-
-   if (construct)
-   {
-      out << ")";
-   }
+	if (construct)
+		out << ")";
 }
 
 
@@ -105,8 +183,8 @@ void writeComparison( const TString &compareOp, const TString &compareCall, TInt
    bool bUseCompareCall = false;
 
    // Determine whether we need the vector or scalar comparison function
-   if ( ( node->getLeft() && node->getLeft()->getNominalSize() > 1 ) ||
-        ( node->getRight() && node->getRight()->getNominalSize() > 1 ) )
+   if ( ( node->getLeft() && !node->getLeft()->isScalar()) ||
+        ( node->getRight() && !node->getRight()->isScalar()) )
    {
       bUseCompareCall = true;
    }
@@ -121,9 +199,9 @@ void writeComparison( const TString &compareOp, const TString &compareCall, TInt
       if (node->getLeft())
       {
          // If it is a float, need to smear to the size of the right hand side
-         if ( node->getLeft()->getNominalSize() == 1 )
+         if (node->getLeft()->isScalar())
          {
-            out << "vec" <<  node->getRight()->getNominalSize() << "( ";
+            out << "vec" <<  node->getRight()->getRowsCount() << "( ";
 
             node->getLeft()->traverse(goit);
 
@@ -139,9 +217,9 @@ void writeComparison( const TString &compareOp, const TString &compareCall, TInt
       if (node->getRight())
       {
          // If it is a float, need to smear to the size of the left hand side
-         if ( node->getRight()->getNominalSize() == 1 )
+         if (node->getRight()->isScalar())
          {
-            out << "vec" <<  node->getLeft()->getNominalSize() << "( ";
+            out << "vec" <<  node->getLeft()->getRowsCount() << "( ";
 
             node->getRight()->traverse(goit);
 
@@ -172,8 +250,8 @@ void writeComparison( const TString &compareOp, const TString &compareCall, TInt
 
 void writeFuncCall( const TString &name, TIntermAggregate *node, TGlslOutputTraverser* goit, bool bGenMatrix = false )
 {
-   TIntermSequence::iterator sit;
-   TIntermSequence &sequence = node->getSequence(); 
+   TNodeArray::iterator sit;
+   TNodeArray& nodes = node->getNodes(); 
    GlslFunction *current = goit->current;
    std::stringstream& out = current->getActiveOutput();
 
@@ -190,9 +268,9 @@ void writeFuncCall( const TString &name, TIntermAggregate *node, TGlslOutputTrav
 
    out << name << "( ";
 
-	for (sit = sequence.begin(); sit != sequence.end(); ++sit)
+	for (sit = nodes.begin(); sit != nodes.end(); ++sit)
 	{
-		if (sit !=sequence.begin())
+		if (sit !=nodes.begin())
 			out << ", ";
 		(*sit)->traverse(goit);
 	}
@@ -220,9 +298,34 @@ void setupUnaryBuiltInFuncCall( const TString &name, TIntermUnary *node, TString
 }
 
 
+
 void writeTex( const TString &name, TIntermAggregate *node, TGlslOutputTraverser* goit )
 {
-   writeFuncCall( name, node, goit);
+	TNodeArray& nodes = node->getNodes(); 
+	TBasicType sampler_type = (*nodes.begin())->getAsTyped()->getBasicType();
+	TString new_name;
+	
+    //ACS: do we need to change these for 1.40? 1.20-style texture lookups should just not show up at all, right?
+	if (isShadowSampler(sampler_type)) {
+		if (name == "texture2D")
+			new_name = "shadow2D";
+		else if (name == "texture2DProj")
+			new_name = "shadow2DProj";
+		else if (name == "texture1D")
+			new_name = "shadow1D";
+		else if (name == "texture1DProj")
+			new_name = "shadow1DProj";
+		else if (name == "texture2DRect")
+			new_name = "shadow2DRect";
+		else if (name == "texture2DRectProj")
+			new_name = "shadow2DRectProj";
+		else
+			new_name = name;
+	} else {
+		new_name = name;
+	}
+	
+	writeFuncCall(new_name, node, goit);
 }
 
 static bool SafeEquals(const char* a, const char* b)
@@ -255,69 +358,252 @@ void TGlslOutputTraverser::outputLineDirective (const TSourceLoc& line)
 
 
 
-TGlslOutputTraverser::TGlslOutputTraverser(TInfoSink& i, std::vector<GlslFunction*> &funcList, std::vector<GlslStruct*> &sList, bool usePrecision)
+TGlslOutputTraverser::TGlslOutputTraverser(TInfoSink& i, std::vector<GlslFunction*> &funcList, std::vector<GlslStruct*> &sList, std::stringstream& deferredArrayInit, ETargetVersion version, unsigned options)
 : infoSink(i)
 , generatingCode(true)
 , functionList(funcList)
 , structList(sList)
-, m_UsePrecision(usePrecision)
+, m_DeferredArrayInit(deferredArrayInit)
+, swizzleAssignTempCounter(0)
+, m_TargetVersion(version)
+, m_UsePrecision(Hlsl2Glsl_VersionUsesPrecision(version))
+, m_ArrayInitWorkaround(!!(options & ETranslateOpEmitGLSL120ArrayInitWorkaround))
 {
-   m_LastLineOutput.file = NULL;
-   m_LastLineOutput.line = -1;
-   visitSymbol = traverseSymbol;
-   visitConstantUnion = traverseConstantUnion;
-   visitBinary = traverseBinary;
-   visitUnary = traverseUnary;
-   visitSelection = traverseSelection;
-   visitAggregate = traverseAggregate;
-   visitLoop = traverseLoop;
-   visitBranch = traverseBranch;
-   
-   TSourceLoc oneSourceLoc;
-   oneSourceLoc.file=NULL;
-   oneSourceLoc.line=1;
-   
-   global = new GlslFunction( "__global__", "__global__", EgstVoid, EbpUndefined, "", oneSourceLoc);
-   functionList.push_back(global);
-   current = global;
+	m_LastLineOutput.file = NULL;
+	m_LastLineOutput.line = -1;
+	visitSymbol = traverseSymbol;
+	visitConstant = traverseConstant;
+	visitBinary = traverseBinary;
+	visitUnary = traverseUnary;
+	visitSelection = traverseSelection;
+	visitAggregate = traverseAggregate;
+	visitLoop = traverseLoop;
+	visitBranch = traverseBranch;
+	visitDeclaration = traverseDeclaration;
+	
+	TSourceLoc oneSourceLoc;
+	oneSourceLoc.file=NULL;
+	oneSourceLoc.line=1;
+
+	// Add a fake "global" function for declarations & initializers happening
+	// at global scope.
+	global = new GlslFunction( "__global__", "__global__", EgstVoid, EbpUndefined, "", oneSourceLoc);
+	functionList.push_back(global);
+	current = global;
+}
+
+
+
+void TGlslOutputTraverser::traverseArrayDeclarationWithInit(TIntermDeclaration* decl)
+{
+	assert(decl->containsArrayInitialization());
+	
+	std::stringstream* out = &current->getActiveOutput();
+	TType& type = *decl->getTypePointer();
+	EGlslSymbolType symbol_type = translateType(decl->getTypePointer());
+	
+	const bool emit_120_arrays = (m_TargetVersion >= ETargetGLSL_120);
+	const bool emit_old_arrays = !emit_120_arrays || m_ArrayInitWorkaround;
+	const bool emit_both = emit_120_arrays && emit_old_arrays;
+	
+	if (emit_both)
+	{
+		current->indent(*out);
+		(*out) << "#if defined(HLSL2GLSL_ENABLE_ARRAY_120_WORKAROUND)" << std::endl;
+		current->increaseDepth();
+	}
+	
+	if (emit_old_arrays)
+	{
+		TQualifier q = type.getQualifier();
+		if (q == EvqConst)
+			q = EvqTemporary;
+		
+		current->beginStatement();
+		if (q != EvqTemporary && q != EvqGlobal)
+			(*out) << type.getQualifierString() << " ";
+		
+		TIntermBinary* assign = decl->getDeclaration()->getAsBinaryNode();
+		TIntermSymbol* sym = assign->getLeft()->getAsSymbolNode();
+		TNodeArray& init = assign->getRight()->getAsAggregate()->getNodes();
+		
+		writeType(*out, symbol_type, NULL, this->m_UsePrecision ? decl->getPrecision() : EbpUndefined);
+		(*out) << " " << sym->getSymbol() << "[" << type.getArraySize() << "]";
+		current->endStatement();
+
+		std::stringstream* oldOut = out;
+		if (sym->isGlobal())
+		{
+			current->pushDepth(0);
+			out = &m_DeferredArrayInit;
+			current->setActiveOutput(out);
+		}
+		
+		unsigned n_vals = init.size();
+		for (unsigned i = 0; i != n_vals; ++i) {
+			current->beginStatement();
+			sym->traverse(this);
+			(*out) << "[" << i << "] = ";
+			EGlslSymbolType init_type = translateType(init[i]->getAsTyped()->getTypePointer());
+
+			bool diffTypes = (symbol_type != init_type);
+			if (diffTypes) {
+				writeType (*out, symbol_type, NULL, EbpUndefined);
+				(*out) << "(";
+			}
+			init[i]->traverse(this);
+			if (diffTypes) {
+				(*out) << ")";
+			}
+			current->endStatement();
+		}
+		
+		if (sym->isGlobal())
+		{
+			out = oldOut;
+			current->setActiveOutput(oldOut);
+			current->popDepth();
+		}
+	}
+	
+	if (emit_both)
+	{
+		current->decreaseDepth();
+		current->indent(*out);
+		(*out) << "#else" << std::endl;
+		current->increaseDepth();
+	}
+	
+	if (emit_120_arrays)
+	{	
+		current->beginStatement();
+		
+		if (type.getQualifier() != EvqTemporary && type.getQualifier() != EvqGlobal)
+			(*out) << type.getQualifierString() << " ";
+		
+		if (type.getBasicType() == EbtStruct)
+			(*out) << type.getTypeName();
+		else
+			writeType(*out, symbol_type, NULL, this->m_UsePrecision ? decl->getPrecision() : EbpUndefined);
+		
+		if (type.isArray())
+			(*out) << "[" << type.getArraySize() << "]";
+		
+		(*out) << " ";
+		
+		decl->getDeclaration()->traverse(this);
+		
+		current->endStatement();
+	}
+	
+	if (emit_both)
+	{
+		current->decreaseDepth();
+		current->indent(*out);
+		(*out) << "#endif" << std::endl;
+	}
+}
+
+
+
+bool TGlslOutputTraverser::traverseDeclaration(bool preVisit, TIntermDeclaration* decl, TIntermTraverser* it) {
+	TGlslOutputTraverser* goit = static_cast<TGlslOutputTraverser*>(it);
+	GlslFunction *current = goit->current;
+	std::stringstream& out = current->getActiveOutput();
+	
+	if (decl->containsArrayInitialization())
+	{
+		goit->traverseArrayDeclarationWithInit (decl);
+		return false;
+	}
+
+	TType& type = *decl->getTypePointer();
+	if (type.getBasicType() == EbtTexture)
+	{
+		// right now we can't do anything with "texture" type, just skip it
+		return false;
+	}
+	
+	current->beginStatement();
+	
+	if (type.getQualifier() != EvqTemporary && type.getQualifier() != EvqGlobal)
+		out << type.getQualifierString() << " ";
+	
+	if (type.getBasicType() == EbtStruct)
+		out << type.getTypeName();
+	else
+	{
+		EGlslSymbolType symbol_type = translateType(decl->getTypePointer());
+		writeType(out, symbol_type, NULL, goit->m_UsePrecision ? decl->getPrecision() : EbpUndefined);
+	}
+
+	out << " ";
+
+	// Pre-GLSL1.20, global variables can't have initializers.
+	// So just print the symbol node itself.
+	bool skipInitializer = false;
+	const bool can_have_global_init = (goit->m_TargetVersion >= ETargetGLSL_120);
+	if (!can_have_global_init && decl->hasInitialization() && type.getQualifier() != EvqConst)
+	{
+		TIntermBinary* initNode = decl->getDeclaration()->getAsBinaryNode();
+		TIntermSymbol* symbol = initNode->getLeft()->getAsSymbolNode();
+		if (symbol && symbol->isGlobal())
+		{
+			skipInitializer = true;
+			symbol->traverse(goit);
+		}
+	}
+	
+	if (!skipInitializer)
+		decl->getDeclaration()->traverse(goit);
+	
+	if (type.isArray())
+		out << "[" << type.getArraySize() << "]";
+	
+	current->endStatement();
+	return false;
 }
 
 
 void TGlslOutputTraverser::traverseSymbol(TIntermSymbol *node, TIntermTraverser *it)
 {
-   TGlslOutputTraverser* goit = static_cast<TGlslOutputTraverser*>(it);
-   GlslFunction *current = goit->current;
-   std::stringstream& out = current->getActiveOutput();
+	TGlslOutputTraverser* goit = static_cast<TGlslOutputTraverser*>(it);
+	GlslFunction *current = goit->current;
+	std::stringstream& out = current->getActiveOutput();
 
-   current->beginStatement();
+	current->beginStatement();
 
-   if ( ! current->hasSymbol( node->getId()))
-   {
+	if ( ! current->hasSymbol( node->getId()))
+	{
 
-      //check to see if it is a global we can share
-      if ( goit->global->hasSymbol( node->getId()))
-      {
-         current->addSymbol( &goit->global->getSymbol( node->getId()));
-      }
-      else
-      {
-         int array = node->getTypePointer()->isArray() ? node->getTypePointer()->getArraySize() : 0;
-         const char* semantic = "";
-         if (node->getInfo())
-            semantic = node->getInfo()->getSemantic().c_str();
-         GlslSymbol * sym = new GlslSymbol( node->getSymbol().c_str(), semantic, node->getId(),
-			 translateType(node->getTypePointer()), goit->m_UsePrecision?node->getPrecision():EbpUndefined, translateQualifier(node->getQualifier()), array);
-         current->addSymbol(sym);
-         if (sym->getType() == EgstStruct)
-         {
-            GlslStruct *s = goit->createStructFromType( node->getTypePointer());
-            sym->setStruct(s);
-         }
-      }
-   }
+		//check to see if it is a global we can share
+		if ( goit->global->hasSymbol( node->getId()))
+		{
+			current->addSymbol( &goit->global->getSymbol( node->getId()));
+		}
+		else
+		{
+			int array = node->getTypePointer()->isArray() ? node->getTypePointer()->getArraySize() : 0;
+			const char* semantic = "";
+			if (node->getInfo())
+				semantic = node->getInfo()->getSemantic().c_str();
+			
+			GlslSymbol * sym = new GlslSymbol( node->getSymbol().c_str(), semantic, node->getId(),
+				translateType(node->getTypePointer()), goit->m_UsePrecision?node->getPrecision():EbpUndefined, translateQualifier(node->getQualifier()), array);
+			sym->setIsGlobal(node->isGlobal());
 
+			current->addSymbol(sym);
+			if (sym->getType() == EgstStruct)
+			{
+				GlslStruct *s = goit->createStructFromType( node->getTypePointer());
+				sym->setStruct(s);
+			}
+		}
+	}
 
-   out << current->getSymbol( node->getId()).getName();
+	// If we're at the global scope, emit the non-mutable names of uniforms.
+	bool globalScope = current == goit->global;
+	out << current->getSymbol(node->getId()).getName(!globalScope);
 }
 
 
@@ -342,7 +628,7 @@ void TGlslOutputTraverser::traverseParameterSymbol(TIntermSymbol *node, TIntermT
 }
 
 
-void TGlslOutputTraverser::traverseConstantUnion( TIntermConstantUnion *node, TIntermTraverser *it )
+void TGlslOutputTraverser::traverseConstant( TIntermConstant *node, TIntermTraverser *it )
 {
    TGlslOutputTraverser* goit = static_cast<TGlslOutputTraverser*>(it);
    GlslFunction *current = goit->current;
@@ -350,7 +636,6 @@ void TGlslOutputTraverser::traverseConstantUnion( TIntermConstantUnion *node, TI
    EGlslSymbolType type = translateType( node->getTypePointer());
    GlslStruct *str = 0;
 
-   constUnion *c = node->getUnionArrayPointer();
 
    current->beginStatement();
 
@@ -359,33 +644,31 @@ void TGlslOutputTraverser::traverseConstantUnion( TIntermConstantUnion *node, TI
       str = goit->createStructFromType( node->getTypePointer());
    }
 
-   writeConstantConstructor (out, type, goit->m_UsePrecision?node->getPrecision():EbpUndefined, c, str);
+   writeConstantConstructor (out, type, goit->m_UsePrecision?node->getPrecision():EbpUndefined, node, str);
 }
 
 
-void TGlslOutputTraverser::traverseImmediateConstant( TIntermConstantUnion *node, TIntermTraverser *it )
+void TGlslOutputTraverser::traverseImmediateConstant( TIntermConstant *c, TIntermTraverser *it )
 {
    TGlslOutputTraverser* goit = static_cast<TGlslOutputTraverser*>(it);
 
-   constUnion *c = node->getUnionArrayPointer();
-
    // These are all expected to be length 1
-   assert( node->getSize() == 1);
+   assert(c->getSize() == 1);
 
    // Autotype the result
-   switch (c[0].getType())
+   switch (c->getBasicType())
    {
    case EbtBool:
-      goit->indexList.push_back( c[0].getBConst() ? 1 : 0);
+      goit->indexList.push_back(c->toBool() ? 1 : 0);
       break;
    case EbtInt:
-      goit->indexList.push_back( c[0].getIConst());
+      goit->indexList.push_back(c->toInt());
       break;
    case EbtFloat:
-      goit->indexList.push_back( int(c[0].getFConst()));
+      goit->indexList.push_back((int)c->toFloat());
       break;
    default:
-      assert(0); 
+      assert(false && "Invalid constant type. Only bool, int and float supported"); 
       goit->indexList.push_back(0);
    }
 }
@@ -429,49 +712,6 @@ bool TGlslOutputTraverser::traverseBinary( bool preVisit, TIntermBinary *node, T
    switch (node->getOp())
    {
    case EOpAssign:                   op = "=";   infix = true; needsParens = false; break;
-
-   case EOpInitialize:
-      if (goit->parseInitializer(node))
-         return false;
-
-      // Check to see if we have an array initializer list
-      if ( node->getLeft() && node->getRight() )
-      {
-         TIntermSymbol *symNode = node->getLeft()->getAsSymbolNode();
-         TIntermAggregate *aggNode = node->getRight()->getAsAggregate();
-
-         // Left hand size is a symbol, right hand side is an aggregate.  This
-         // is an initializer sequence for an array.
-         if ( symNode && symNode->isArray() && aggNode )
-         {
-            // Get the number of elements in the array.  TParseContext::constructArray should
-            // have already made sure that the correct number of elements are present in
-            // the initializer sequence
-            int nElements = symNode->getTypePointer()->getArraySize();
-
-            // Loop over all elements
-            for ( int i = 0; i < nElements; i++ )
-            {
-               // Initialize each element
-               node->getLeft()->traverse(goit);
-               out << "[" << i << "] = ";
-               aggNode->getSequence()[i]->traverse(goit);                      
-
-               current->endStatement();
-               if ( i != nElements - 1 )
-                  current->beginStatement();
-            }
-            return false;
-         }
-      }
-
-      // Fallthrough and process as a normal assignment
-      current->beginStatement();
-      op = "=";
-      infix = true;
-      needsParens = false;
-      break;
-
    case EOpAddAssign:                op = "+=";  infix = true; needsParens = false; break;
    case EOpSubAssign:                op = "-=";  infix = true; needsParens = false; break;
    case EOpMulAssign:                op = "*=";  infix = true; needsParens = false; break;
@@ -485,7 +725,7 @@ bool TGlslOutputTraverser::traverseBinary( bool preVisit, TIntermBinary *node, T
    case EOpInclusiveOrAssign:        op = "|=";  infix = true; needsParens = false; break;
    case EOpExclusiveOrAssign:        op = "^=";  infix = true; needsParens = false; break;
    case EOpLeftShiftAssign:          op = "<<="; infix = true; needsParens = false; break;
-   case EOpRightShiftAssign:         op = "??="; infix = true; needsParens = false; break;
+   case EOpRightShiftAssign:         op = ">>="; infix = true; needsParens = false; break;
 
    case EOpIndexDirect:
       {
@@ -500,7 +740,7 @@ bool TGlslOutputTraverser::traverseBinary( bool preVisit, TIntermBinary *node, T
 
 		 if (left->isMatrix() && !left->isArray())
 		 {
-			 if (right->getAsConstantUnion())
+			 if (right->getAsConstant())
 			 {
 				 current->addLibFunction (EOpMatrixIndex);
 				 out << "xll_matrixindex (";
@@ -527,17 +767,17 @@ bool TGlslOutputTraverser::traverseBinary( bool preVisit, TIntermBinary *node, T
          left->traverse(goit);
 
          // Special code for handling a vector component select (this improves readability)
-         if (left->isVector() && !left->isArray() && right->getAsConstantUnion())
+         if (left->isVector() && !left->isArray() && right->getAsConstant())
          {
             char swiz[] = "xyzw";
-            goit->visitConstantUnion = TGlslOutputTraverser::traverseImmediateConstant;
+            goit->visitConstant = TGlslOutputTraverser::traverseImmediateConstant;
             goit->generatingCode = false;
             right->traverse(goit);
             assert( goit->indexList.size() == 1);
             assert( goit->indexList[0] < 4);
             out << "." << swiz[goit->indexList[0]];
             goit->indexList.clear();
-            goit->visitConstantUnion = TGlslOutputTraverser::traverseConstantUnion;
+            goit->visitConstant = TGlslOutputTraverser::traverseConstant;
             goit->generatingCode = true;
          }
          else
@@ -559,7 +799,7 @@ bool TGlslOutputTraverser::traverseBinary( bool preVisit, TIntermBinary *node, T
 
 	  if (left && right && left->isMatrix() && !left->isArray())
 	  {
-		  if (right->getAsConstantUnion())
+		  if (right->getAsConstant())
 		  {
 			  current->addLibFunction (EOpMatrixIndex);
 			  out << "xll_matrixindex (";
@@ -601,7 +841,7 @@ bool TGlslOutputTraverser::traverseBinary( bool preVisit, TIntermBinary *node, T
 
          // The right child is always an offset into the struct, switch to get an
          // immediate constant, and put it back afterwords
-         goit->visitConstantUnion = TGlslOutputTraverser::traverseImmediateConstant;
+         goit->visitConstant = TGlslOutputTraverser::traverseImmediateConstant;
          goit->generatingCode = false;
 
          if (node->getRight())
@@ -614,7 +854,7 @@ bool TGlslOutputTraverser::traverseBinary( bool preVisit, TIntermBinary *node, T
          }
 
          goit->indexList.clear();
-         goit->visitConstantUnion = TGlslOutputTraverser::traverseConstantUnion;
+         goit->visitConstant = TGlslOutputTraverser::traverseConstant;
          goit->generatingCode = true;
       }
       return false;
@@ -623,7 +863,7 @@ bool TGlslOutputTraverser::traverseBinary( bool preVisit, TIntermBinary *node, T
       current->beginStatement();
       if (node->getLeft())
          node->getLeft()->traverse(goit);
-      goit->visitConstantUnion = TGlslOutputTraverser::traverseImmediateConstant;
+      goit->visitConstant = TGlslOutputTraverser::traverseImmediateConstant;
       goit->generatingCode = false;
       if (node->getRight())
       {
@@ -640,79 +880,86 @@ bool TGlslOutputTraverser::traverseBinary( bool preVisit, TIntermBinary *node, T
          }
       }
       goit->indexList.clear();
-      goit->visitConstantUnion = TGlslOutputTraverser::traverseConstantUnion;
+      goit->visitConstant = TGlslOutputTraverser::traverseConstant;
       goit->generatingCode = true;
       return false;
 
-   case EOpMatrixSwizzle:
-      current->beginStatement();
-      // This presently only works for swizzles as rhs operators
-      goit->visitConstantUnion = TGlslOutputTraverser::traverseImmediateConstant;
-      goit->generatingCode = false;
-      if (node->getRight())
-      {
-         node->getRight()->traverse(goit);
-         assert( goit->indexList.size() <= 4);
-         assert( goit->indexList.size() > 0);
-         int collumn[4], row[4];
-         for (int ii = 0; ii < (int)goit->indexList.size(); ii++)
-         {
-            int val = goit->indexList[ii];
-            collumn[ii] = val/4;
-            row[ii] = val%4;
-         }
-         bool sameCollumn = true;
-         for (int ii = 1; ii < (int)goit->indexList.size(); ii++)
-         {
-            sameCollumn &= collumn[ii] == collumn[ii-1];
-         }
-         if (sameCollumn)
-         {
-            //select column, then swizzle row
-            if (node->getLeft())
-               node->getLeft()->traverse(goit);
-            out << "[" << collumn[0] << "].";
-            const char fields[] = "xyzw";
-            for (int ii = 0; ii < (int)goit->indexList.size(); ii++)
-            {
-               out << fields[row[ii]];
-            }
-         }
-         else
-         {
-            // Insert constructor, and dereference individually
+	case EOpMatrixSwizzle:		   
+		// This presently only works for swizzles as rhs operators
+		if (node->getRight())
+		{
+			goit->visitConstant = TGlslOutputTraverser::traverseImmediateConstant;
+			goit->generatingCode = false;
 
-            // Might need to account for different types here 
-            assert( (int)goit->indexList.size() != 1); //should have hit same collumn case
-            out << "vec" << (int)goit->indexList.size() << "( ";
-            const char fields[] = "xyzw";
-            if (node->getLeft())
-               node->getLeft()->traverse(goit);
-            out << "[" << collumn[0] << "].";
-            out << fields[row[0]];
-            for (int ii = 1; ii < (int)goit->indexList.size(); ii++)
-            {
-               out << ", ";
-               if (node->getLeft())
-                  node->getLeft()->traverse(goit);
-               out << "[" << collumn[ii] << "].";
-               out << fields[row[ii]];
-            }
-            out << ")";
-         }
-      }
-      goit->indexList.clear();
-      goit->visitConstantUnion = TGlslOutputTraverser::traverseConstantUnion;
-      goit->generatingCode = true;
-      return false;
+			node->getRight()->traverse(goit);
+
+			goit->visitConstant = TGlslOutputTraverser::traverseConstant;
+			goit->generatingCode = true;
+
+			std::vector<int> elements = goit->indexList;
+			goit->indexList.clear();
+			
+			if (elements.size() > 4 || elements.size() < 1) {
+				goit->infoSink.info << "Matrix swizzle operations can must contain at least 1 and at most 4 element selectors.";
+				return true;
+			}
+
+			unsigned column[4] = {0}, row[4] = {0};
+			for (unsigned i = 0; i != elements.size(); ++i)
+			{
+				unsigned val = elements[i];
+				column[i] = val % 4;
+				row[i] = val / 4;
+			}
+
+			bool sameColumn = true;
+			for (unsigned i = 1; i != elements.size(); ++i)
+				sameColumn &= column[i] == column[i-1];
+
+			static const char* fields = "xyzw";
+			
+			if (sameColumn)
+			{				
+				//select column, then swizzle row
+				if (node->getLeft())
+					node->getLeft()->traverse(goit);
+				out << "[" << column[0] << "].";
+				
+				for (unsigned i = 0; i < elements.size(); ++i)
+					out << fields[row[i]];
+			}
+			else
+			{
+				// Insert constructor, and dereference individually
+
+				// Might need to account for different types here 
+				assert( elements.size() != 1); //should have hit same collumn case
+				out << "vec" << elements.size() << "(";
+				if (node->getLeft())
+					node->getLeft()->traverse(goit);
+				out << "[" << column[0] << "].";
+				out << fields[row[0]];
+				
+				for (unsigned i = 1; i < elements.size(); ++i)
+				{
+					out << ", ";
+					if (node->getLeft())
+						node->getLeft()->traverse(goit);
+					out << "[" << column[i] << "].";
+					out << fields[row[i]];
+				}
+				out << ")";
+			}
+		}
+		return false;
 
    case EOpAdd:    op = "+"; infix = true; break;
    case EOpSub:    op = "-"; infix = true; break;
    case EOpMul:    op = "*"; infix = true; break;
    case EOpDiv:    op = "/"; infix = true; break;
-   case EOpMod:    op = "%"; infix = true; break;
-   case EOpRightShift:  op = "<<"; infix = true; break;
-   case EOpLeftShift:   op = ">>"; infix = true; break;
+   case EOpMod:    op = "mod"; infix = false; break;
+   case EOpRightShift:  op = ">>"; infix = true; break;
+   case EOpLeftShift:   op = "<<"; infix = true; break;
    case EOpAnd:         op = "&"; infix = true; break;
    case EOpInclusiveOr: op = "|"; infix = true; break;
    case EOpExclusiveOr: op = "^"; infix = true; break;
@@ -758,6 +1005,57 @@ bool TGlslOutputTraverser::traverseBinary( bool preVisit, TIntermBinary *node, T
 
    if (infix)
    {
+	   // special case for swizzled matrix assignment
+	   if (node->getOp() == EOpAssign && node->getLeft() && node->getRight()) {
+		   TIntermBinary* lval = node->getLeft()->getAsBinaryNode();
+		   
+		   if (lval && lval->getOp() == EOpMatrixSwizzle) {
+			   static const char* vec_swizzles = "xyzw";
+			   TIntermTyped* rval = node->getRight();
+			   TIntermTyped* lexp = lval->getLeft();
+			   
+			   goit->visitConstant = TGlslOutputTraverser::traverseImmediateConstant;
+			   goit->generatingCode = false;
+			   
+			   lval->getRight()->traverse(goit);
+			   
+			   goit->visitConstant = TGlslOutputTraverser::traverseConstant;
+			   goit->generatingCode = true;
+			   
+			   std::vector<int> swizzles = goit->indexList;
+			   goit->indexList.clear();
+			   
+			   char temp_rval[128];
+			   unsigned n_swizzles = swizzles.size();
+			   
+			   if (n_swizzles > 1) {
+				   snprintf(temp_rval, 128, "xlat_swiztemp%d", goit->swizzleAssignTempCounter++);
+				   
+				   current->beginStatement();
+				   out << "vec" << n_swizzles << " " << temp_rval << " = ";
+				   rval->traverse(goit);			   
+				   current->endStatement();
+			   }
+			   
+			   for (unsigned i = 0; i != n_swizzles; ++i) {
+				   unsigned col = swizzles[i] / 4;
+				   unsigned row = swizzles[i] % 4;
+				   
+				   current->beginStatement();
+				   lexp->traverse(goit);
+				   out << "[" << row << "][" << col << "] = ";
+				   if (n_swizzles > 1)
+					   out << temp_rval << "." << vec_swizzles[i];
+				   else
+					   rval->traverse(goit);
+				   
+				   current->endStatement();
+			   }
+
+			   return false;
+		   }
+	   }
+
       if (needsParens)
          out << '(';
 
@@ -773,7 +1071,7 @@ bool TGlslOutputTraverser::traverseBinary( bool preVisit, TIntermBinary *node, T
    else
    {
       if (assign)
-      {
+      {		  
          // Need to traverse the left child twice to allow for the assign and the op
          // This is OK, because we know it is an lvalue
          if (node->getLeft())
@@ -824,7 +1122,7 @@ bool TGlslOutputTraverser::traverseUnary( bool preVisit, TIntermUnary *node, TIn
    case EOpNegative:       op = "-";  funcStyle = false; prefix = true; break;
    case EOpVectorLogicalNot:
    case EOpLogicalNot:     op = "!";  funcStyle = false; prefix = true; break;
-   case EOpBitwiseNot:     op = "-";  funcStyle = false; prefix = true; break;
+   case EOpBitwiseNot:     op = "~";  funcStyle = false; prefix = true; break;
 
    case EOpPostIncrement:  op = "++"; funcStyle = false; prefix = false; break;
    case EOpPostDecrement:  op = "--"; funcStyle = false; prefix = false; break;
@@ -834,9 +1132,9 @@ bool TGlslOutputTraverser::traverseUnary( bool preVisit, TIntermUnary *node, TIn
    case EOpConvIntToBool:
    case EOpConvFloatToBool:
       op = "bool";
-      if ( node->getTypePointer()->getNominalSize() > 1)
+      if (node->getTypePointer()->isVector())
       {
-         zero[0] += node->getTypePointer()->getNominalSize();
+         zero[0] += node->getTypePointer()->getRowsCount();
          op = TString("bvec") + zero; 
       }
       funcStyle = true;
@@ -846,9 +1144,9 @@ bool TGlslOutputTraverser::traverseUnary( bool preVisit, TIntermUnary *node, TIn
    case EOpConvBoolToFloat:
    case EOpConvIntToFloat:
       op = "float";
-      if ( node->getTypePointer()->getNominalSize() > 1)
+      if (node->getTypePointer()->isVector())
       {
-         zero[0] += node->getTypePointer()->getNominalSize();
+         zero[0] += node->getTypePointer()->getRowsCount();
          op = TString("vec") + zero; 
       }
       funcStyle = true;
@@ -858,9 +1156,9 @@ bool TGlslOutputTraverser::traverseUnary( bool preVisit, TIntermUnary *node, TIn
    case EOpConvFloatToInt: 
    case EOpConvBoolToInt:
       op = "int";
-      if ( node->getTypePointer()->getNominalSize() > 1)
+      if (node->getTypePointer()->isVector())
       {
-         zero[0] += node->getTypePointer()->getNominalSize();
+         zero[0] += node->getTypePointer()->getRowsCount();
          op = TString("ivec") + zero; 
       }
       funcStyle = true;
@@ -1007,7 +1305,8 @@ bool TGlslOutputTraverser::traverseSelection( bool preVisit, TIntermSelection *n
 		node->getCondition()->traverse(goit);
 		out << ')';
 		current->beginBlock();
-		node->getTrueBlock()->traverse(goit);
+		if (node->getTrueBlock())
+    		node->getTrueBlock()->traverse(goit);
 		current->endBlock();
 		if (node->getFalseBlock())
 		{
@@ -1026,14 +1325,11 @@ bool TGlslOutputTraverser::traverseSelection( bool preVisit, TIntermSelection *n
 		out << "xll_vecTSel (";
 		node->getCondition()->traverse(goit);
 		out << ", ";
+		assert(node->getTrueBlock());
 		node->getTrueBlock()->traverse(goit);
 		out << ", ";
-		if (node->getFalseBlock())
-		{
-			node->getFalseBlock()->traverse(goit);
-		}
-		else
-			assert(0);
+		assert(node->getFalseBlock());
+		node->getFalseBlock()->traverse(goit);
 		out << ")";
 	}
 	else
@@ -1042,14 +1338,11 @@ bool TGlslOutputTraverser::traverseSelection( bool preVisit, TIntermSelection *n
 		out << "(( ";
 		node->getCondition()->traverse(goit);
 		out << " ) ? ( ";
+		assert(node->getTrueBlock());
 		node->getTrueBlock()->traverse(goit);
 		out << " ) : ( ";
-		if (node->getFalseBlock())
-		{
-			node->getFalseBlock()->traverse(goit);
-		}
-		else
-			assert(0);
+		assert(node->getFalseBlock());
+		node->getFalseBlock()->traverse(goit);
 		out << " ))";
 	}
 
@@ -1062,7 +1355,8 @@ bool TGlslOutputTraverser::traverseAggregate( bool preVisit, TIntermAggregate *n
    TGlslOutputTraverser* goit = static_cast<TGlslOutputTraverser*>(it);
    GlslFunction *current = goit->current;
    std::stringstream& out = current->getActiveOutput();
-   int argCount = (int) node->getSequence().size();
+   int argCount = (int) node->getNodes().size();
+   bool usePost120TextureLookups = UsePost120TextureLookups(goit->m_TargetVersion); 
 
    if (node->getOp() == EOpNull)
    {
@@ -1077,9 +1371,9 @@ bool TGlslOutputTraverser::traverseAggregate( bool preVisit, TIntermAggregate *n
       if (goit->generatingCode)
       {
 		  goit->outputLineDirective (node->getLine());
-         TIntermSequence::iterator sit;
-         TIntermSequence &sequence = node->getSequence(); 
-		 for (sit = sequence.begin(); sit != sequence.end(); ++sit)
+         TNodeArray::iterator sit;
+         TNodeArray& nodes = node->getNodes(); 
+		 for (sit = nodes.begin(); sit != nodes.end(); ++sit)
 		 {
 		   goit->outputLineDirective((*sit)->getLine());
 		   (*sit)->traverse(it);
@@ -1089,9 +1383,9 @@ bool TGlslOutputTraverser::traverseAggregate( bool preVisit, TIntermAggregate *n
       }
       else
       {
-         TIntermSequence::iterator sit;
-         TIntermSequence &sequence = node->getSequence(); 
-		  for (sit = sequence.begin(); sit != sequence.end(); ++sit)
+         TNodeArray::iterator sit;
+         TNodeArray& nodes = node->getNodes(); 
+		  for (sit = nodes.begin(); sit != nodes.end(); ++sit)
 		  {
 		    (*sit)->traverse(it);
 		  }
@@ -1112,9 +1406,9 @@ bool TGlslOutputTraverser::traverseAggregate( bool preVisit, TIntermAggregate *n
          goit->functionList.push_back( func);
          goit->current = func;
          goit->current->beginBlock( false);
-         TIntermSequence::iterator sit;
-         TIntermSequence &sequence = node->getSequence(); 
-		 for (sit = sequence.begin(); sit != sequence.end(); ++sit)
+         TNodeArray::iterator sit;
+         TNodeArray& nodes = node->getNodes(); 
+		 for (sit = nodes.begin(); sit != nodes.end(); ++sit)
 		 {
 			 (*sit)->traverse(it);
 		 }
@@ -1126,9 +1420,9 @@ bool TGlslOutputTraverser::traverseAggregate( bool preVisit, TIntermAggregate *n
    case EOpParameters:
       it->visitSymbol = traverseParameterSymbol;
       {
-         TIntermSequence::iterator sit;
-         TIntermSequence &sequence = node->getSequence(); 
-		 for (sit = sequence.begin(); sit != sequence.end(); ++sit)
+         TNodeArray::iterator sit;
+         TNodeArray& nodes = node->getNodes(); 
+		 for (sit = nodes.begin(); sit != nodes.end(); ++sit)
            (*sit)->traverse(it);
       }
       it->visitSymbol = traverseSymbol;
@@ -1146,30 +1440,40 @@ bool TGlslOutputTraverser::traverseAggregate( bool preVisit, TIntermAggregate *n
    case EOpConstructIVec2: writeFuncCall( "ivec2", node, goit); return false;
    case EOpConstructIVec3: writeFuncCall( "ivec3", node, goit); return false;
    case EOpConstructIVec4: writeFuncCall( "ivec4", node, goit); return false;
-   case EOpConstructMat2:  writeFuncCall( "mat2", node, goit); return false;
-   case EOpConstructMat3:  writeFuncCall( "mat3", node, goit); return false;
-   case EOpConstructMat4:  writeFuncCall( "mat4", node, goit); return false;
-   case EOpConstructStruct:  writeFuncCall( "struct", node, goit); return false;
+
+   case EOpConstructMat2x2:  writeFuncCall( "mat2",   node, goit); return false;
+   case EOpConstructMat2x3:  writeFuncCall( "mat2x3", node, goit); return false;
+   case EOpConstructMat2x4:  writeFuncCall( "mat2x4", node, goit); return false;
+
+   case EOpConstructMat3x2:  writeFuncCall( "mat3x2", node, goit); return false;
+   case EOpConstructMat3x3:  writeFuncCall( "mat3",   node, goit); return false;
+   case EOpConstructMat3x4:  writeFuncCall( "mat3x4", node, goit); return false;
+
+   case EOpConstructMat4x2:  writeFuncCall( "mat4x2", node, goit); return false;
+   case EOpConstructMat4x3:  writeFuncCall( "mat4x3", node, goit); return false;
+   case EOpConstructMat4x4:  writeFuncCall( "mat4",   node, goit); return false;
 
 
-   case EOpConstructMat2FromMat:
-      current->addLibFunction(EOpConstructMat2FromMat);
+   case EOpConstructMat2x2FromMat:
+      current->addLibFunction(EOpConstructMat2x2FromMat);
       writeFuncCall( "xll_constructMat2", node, goit);
       return false;
-
-   case EOpConstructMat3FromMat:
-      current->addLibFunction(EOpConstructMat3FromMat);
+   case EOpConstructMat3x3FromMat:
+      current->addLibFunction(EOpConstructMat3x3FromMat);
       writeFuncCall( "xll_constructMat3", node, goit);
       return false;
 
+   case EOpConstructStruct:  writeFuncCall( node->getTypePointer()->getTypeName(), node, goit); return false;
+   case EOpConstructArray:  writeFuncCall( buildArrayConstructorString(*node->getTypePointer()), node, goit); return false;
+
    case EOpComma:
       {
-         TIntermSequence::iterator sit;
-         TIntermSequence &sequence = node->getSequence(); 
-         for (sit = sequence.begin(); sit != sequence.end(); ++sit)
+         TNodeArray::iterator sit;
+         TNodeArray& nodes = node->getNodes(); 
+         for (sit = nodes.begin(); sit != nodes.end(); ++sit)
          {
             (*sit)->traverse(it);
-            if ( sit+1 != sequence.end())
+            if ( sit+1 != nodes.end())
                out << ", ";
          }
       }
@@ -1212,13 +1516,13 @@ bool TGlslOutputTraverser::traverseAggregate( bool preVisit, TIntermAggregate *n
    case EOpMul:
       {
          //This should always have two arguments
-         assert(node->getSequence().size() == 2);
+         assert(node->getNodes().size() == 2);
          current->beginStatement();                     
 
          out << '(';
-         node->getSequence()[0]->traverse(goit);
+         node->getNodes()[0]->traverse(goit);
          out << " * ";
-         node->getSequence()[1]->traverse(goit);
+         node->getNodes()[1]->traverse(goit);
          out << ')';
 
          return false;
@@ -1256,7 +1560,13 @@ bool TGlslOutputTraverser::traverseAggregate( bool preVisit, TIntermAggregate *n
 
    case EOpTex2D:
       if (argCount == 2)
-         writeTex( "texture2D", node, goit);
+      {  
+          if(usePost120TextureLookups) {       
+              writeTex( "texture", node, goit);
+          } else {
+              writeTex( "texture2D", node, goit);
+          }
+      }
       else
       {
          current->addLibFunction(EOpTex2DGrad);
@@ -1265,7 +1575,11 @@ bool TGlslOutputTraverser::traverseAggregate( bool preVisit, TIntermAggregate *n
       return false;
 
    case EOpTex2DProj:     
-      writeTex( "texture2DProj", node, goit); 
+      if(usePost120TextureLookups) {       
+          writeTex( "textureProj", node, goit);
+      } else {
+          writeTex( "texture2DProj", node, goit);
+      }
       return false;
 
    case EOpTex2DLod:      
@@ -1411,30 +1725,30 @@ bool TGlslOutputTraverser::traverseLoop( bool preVisit, TIntermLoop *node, TInte
       current->endBlock();
    }
    else if (loopType == ELoopWhile)
-   {
-      // Process while loop
-      out << "while ( ";
+      {
+         // Process while loop
+         out << "while ( ";
       node->getCondition()->traverse(goit);
-      out << " ) ";
-      current->beginBlock();
-      if (node->getBody())
-         node->getBody()->traverse(goit);
-      current->endBlock();
-   }
-   else
-   {
+         out << " ) ";
+         current->beginBlock();
+         if (node->getBody())
+            node->getBody()->traverse(goit);
+         current->endBlock();
+      }
+      else
+      {
       assert(loopType == ELoopDoWhile);
-      // Process do loop
-      out << "do ";
-      current->beginBlock();
-      if (node->getBody())
-         node->getBody()->traverse(goit);
-      current->endBlock();
-      current->indent();
-      out << "while ( ";
+         // Process do loop
+         out << "do ";
+         current->beginBlock();
+         if (node->getBody())
+            node->getBody()->traverse(goit);
+         current->endBlock();
+         current->indent();
+         out << "while ( ";
       node->getCondition()->traverse(goit);
-      out << " )\n";
-   }
+         out << " )\n";
+      }
    return false;
 }
 
@@ -1499,7 +1813,7 @@ GlslStruct *TGlslOutputTraverser::createStructFromType (TType *type)
 
       for (TTypeList::iterator it = tList.begin(); it != tList.end(); it++)
       {
-         GlslStruct::member m;
+         GlslStruct::StructMember m;
          m.name = it->type->getFieldName().c_str();
 
          if (it->type->hasSemantic())
@@ -1528,48 +1842,4 @@ GlslStruct *TGlslOutputTraverser::createStructFromType (TType *type)
    }
 
    return s;
-}
-
-
-bool TGlslOutputTraverser::parseInitializer( TIntermBinary *node )
-{
-   TIntermTyped *left, *right;
-
-   left = node->getLeft();
-   right = node->getRight();
-
-   if (! left->getAsSymbolNode())
-      return false; //Something is likely seriously wrong
-
-   if (! right->getAsConstantUnion())
-      return false; //only constant initializers
-
-   TIntermSymbol *symNode = left->getAsSymbolNode();
-   TIntermConstantUnion *cUnion = right->getAsConstantUnion();
-
-   if (symNode->getBasicType() == EbtStruct)
-      return false;
-
-   GlslSymbol * sym = NULL;
-
-   if ( !current->hasSymbol( symNode->getId() ) )
-   {
-      int array = symNode->getTypePointer()->isArray() ? symNode->getTypePointer()->getArraySize() : 0;
-      const char* semantic = "";
-
-      if (symNode->getInfo())
-         semantic = symNode->getInfo()->getSemantic().c_str();
-
-      sym = new GlslSymbol( symNode->getSymbol().c_str(), semantic, symNode->getId(),
-                            translateType(symNode->getTypePointer()), m_UsePrecision?node->getPrecision():EbpUndefined, translateQualifier(symNode->getQualifier()), array);
-
-      current->addSymbol(sym);
-   }
-   else
-      return false; //can't init already declared variable
-
-
-   sym->setInitializer ( cUnion->getUnionArrayPointer() );
-
-   return true;
 }

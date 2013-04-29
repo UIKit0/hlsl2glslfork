@@ -5,8 +5,7 @@
 
 #include "SymbolTable.h"
 #include "ParseHelper.h"
-
-#include "InitializeDll.h"
+#include "RemoveTree.h"
 
 #include "../../include/hlsl2glsl.h"
 #include "Initialize.h"
@@ -15,8 +14,102 @@
 #include "../GLSLCodeGen/hlslCrossCompiler.h"
 #include "../GLSLCodeGen/hlslLinker.h"
 
+#include "../Include/InitializeGlobals.h"
+#include "../Include/InitializeParseContext.h"
+#include "osinclude.h"
 
-// A symbol table for each language.  Each has a different set of built-ins, and we want to preserve that 
+
+// -----------------------------------------------------------------------------
+
+
+static OS_TLSIndex s_ThreadInitialized = OS_INVALID_TLS_INDEX;
+
+
+static bool InitThread()
+{
+	if (s_ThreadInitialized == OS_INVALID_TLS_INDEX)
+	{
+		assert(0 && "InitThread(): Process hasn't been initalised.");
+		return false;
+	}
+
+	// already initialized?
+	if (OS_GetTLSValue(s_ThreadInitialized) != 0)
+		return true;
+	
+	// initialize per-thread data
+	InitializeGlobalPools();
+	
+	if (!InitializeGlobalParseContext())
+		return false;
+	
+	if (!OS_SetTLSValue(s_ThreadInitialized, (void *)1))
+	{
+		assert(0 && "InitThread(): Unable to set init flag.");
+		return false;
+	}
+	return true;
+}
+
+
+static bool InitProcess()
+{
+	if (s_ThreadInitialized != OS_INVALID_TLS_INDEX)
+		return true;
+	
+	s_ThreadInitialized = OS_AllocTLSIndex();
+	if (s_ThreadInitialized == OS_INVALID_TLS_INDEX)
+	{
+		assert(0 && "InitProcess(): Failed to allocate TLS area for init flag");
+		return false;
+	}
+	
+	if (!InitializePoolIndex())
+	{
+		assert(0 && "InitProcess(): Failed to initalize global pool");
+		return false;
+	}
+	
+	if (!InitializeParseContextIndex())
+	{
+		assert(0 && "InitProcess(): Failed to initalize parse context");
+		return false;
+	}
+	
+	InitThread();
+	return true;
+}
+
+
+static bool DetachThread()
+{
+	if (s_ThreadInitialized == OS_INVALID_TLS_INDEX)
+		return true;
+	if (OS_GetTLSValue(s_ThreadInitialized) == 0)
+		return true;
+	
+	bool success = true;
+	if (!OS_SetTLSValue(s_ThreadInitialized, (void *)0))
+	{
+		assert(0 && "DetachThread(): Unable to clear init flag.");
+		success = false;
+	}
+	
+	FreeGlobalPools();
+	
+	if (!FreeParseContext())
+		success = false;
+	
+	return success;
+}
+
+
+
+
+// -----------------------------------------------------------------------------
+
+
+// A symbol table for each language.  Each has a different set of built-ins, and we want to preserve that
 // from compile to compile.
 TSymbolTable SymbolTables[EShLangCount];
 
@@ -24,6 +117,12 @@ TSymbolTable SymbolTables[EShLangCount];
 // Global pool allocator (per process)
 TPoolAllocator* PerProcessGPA = 0;
 
+///ACS: added fixedTargetVersion
+///     * If left as default (ETargetVersionCount) Hlsl2Glsl operates as normal
+///     * If set, only Hlsl2Glsl_Translate calls of matching target will work, and 
+///       when set to higher than ETargetGLSL_120, will emit non-deprecated-after-120
+///       texture lookup calls e.g. texture() & textureLod() instead of texture2D() & textureCubeLod()
+ETargetVersion FixedTargetVersion = ETargetVersionCount;
 
 /// Initializize the symbol table
 /// \param BuiltInStrings
@@ -38,10 +137,9 @@ TPoolAllocator* PerProcessGPA = 0;
 ///      Whether to use the global symbol table or the per-language symbol table
 /// \return
 ///      True if succesfully initialized, false otherwise
-bool InitializeSymbolTable( TBuiltInStrings* BuiltInStrings, EShLanguage language, TInfoSink& infoSink, 
+static bool InitializeSymbolTable( TBuiltInStrings* BuiltInStrings, EShLanguage language, TInfoSink& infoSink, 
                             TSymbolTable* symbolTables, bool bUseGlobalSymbolTable )
 {
-   TIntermediate intermediate(infoSink); 
    TSymbolTable* symbolTable;
 
    if ( bUseGlobalSymbolTable )
@@ -49,7 +147,9 @@ bool InitializeSymbolTable( TBuiltInStrings* BuiltInStrings, EShLanguage languag
    else
       symbolTable = &symbolTables[language];
 
-   TParseContext parseContext(*symbolTable, intermediate, language, infoSink);
+	//@TODO: for now, we use same global symbol table for all target language versions.
+	// This is wrong and will have to be changed at some point.
+	TParseContext parseContext(*symbolTable, language, ETargetVersionCount, 0, infoSink);
 
    GlobalParseContext = &parseContext;
 
@@ -111,7 +211,7 @@ bool InitializeSymbolTable( TBuiltInStrings* BuiltInStrings, EShLanguage languag
 ///      Shading language to build symbol table for
 /// \return
 ///      True if succesfully built, false otherwise
-bool GenerateBuiltInSymbolTable(TInfoSink& infoSink, TSymbolTable* symbolTables, EShLanguage language)
+static bool GenerateBuiltInSymbolTable(TInfoSink& infoSink, TSymbolTable* symbolTables, EShLanguage language)
 {
    TBuiltIns builtIns;
 
@@ -131,20 +231,18 @@ bool GenerateBuiltInSymbolTable(TInfoSink& infoSink, TSymbolTable* symbolTables,
 
 
 
-int C_DECL Hlsl2Glsl_Initialize()
+int C_DECL Hlsl2Glsl_Initialize(ETargetVersion fixedTargetVersion /*= ETargetVersionCount*/)
 {
    TInfoSink infoSink;
-   bool ret = true;
 
    if (!InitProcess())
       return 0;
 
-   // This method should be called once per process. If its called by multiple threads, then 
-   // we need to have thread synchronization code around the initialization of per process
-   // global pool allocator
+   FixedTargetVersion = fixedTargetVersion; 
+
    if (!PerProcessGPA)
    {
-      TPoolAllocator *builtInPoolAllocator = new TPoolAllocator(true);
+      TPoolAllocator *builtInPoolAllocator = new TPoolAllocator();
       builtInPoolAllocator->push();
       TPoolAllocator* gPoolAllocator = &GlobalPoolAllocator;
       SetGlobalPoolAllocatorPtr(builtInPoolAllocator);
@@ -152,7 +250,7 @@ int C_DECL Hlsl2Glsl_Initialize()
       TSymbolTable symTables[EShLangCount];
       GenerateBuiltInSymbolTable(infoSink, symTables, EShLangCount);
 
-      PerProcessGPA = new TPoolAllocator(true);
+      PerProcessGPA = new TPoolAllocator();
       PerProcessGPA->push();
       SetGlobalPoolAllocatorPtr(PerProcessGPA);
 
@@ -164,31 +262,39 @@ int C_DECL Hlsl2Glsl_Initialize()
       symTables[EShLangVertex].pop();
       symTables[EShLangFragment].pop();
 
-      initializeHLSLSupportLibrary();
+      initializeHLSLSupportLibrary(FixedTargetVersion);
 
       builtInPoolAllocator->popAll();
       delete builtInPoolAllocator;        
 
    }
 
-   return ret ? 1 : 0;
+   return 1;
 }
 
-
-
-int C_DECL Hlsl2Glsl_Finalize()
+void C_DECL Hlsl2Glsl_Shutdown()
 {
-   if (PerProcessGPA)
-   {
-      SymbolTables[EShLangVertex].pop();
-      SymbolTables[EShLangFragment].pop();
-
-      PerProcessGPA->popAll();
-      delete PerProcessGPA;
-      PerProcessGPA = NULL;
-      finalizeHLSLSupportLibrary();
-   }
-   return 1;
+	if (s_ThreadInitialized == OS_INVALID_TLS_INDEX)
+		return;
+	
+	if (PerProcessGPA)
+	{
+		SymbolTables[EShLangVertex].pop();
+		SymbolTables[EShLangFragment].pop();
+		
+		PerProcessGPA->popAll();
+		delete PerProcessGPA;
+		PerProcessGPA = NULL;
+		finalizeHLSLSupportLibrary();
+	}
+	
+	DetachThread();
+	
+	FreePoolIndex();
+	FreeParseContextIndex();
+	
+	OS_FreeTLSIndex(s_ThreadInitialized);
+	s_ThreadInitialized = OS_INVALID_TLS_INDEX;
 }
 
 
@@ -210,9 +316,11 @@ void C_DECL Hlsl2Glsl_DestructCompiler( ShHandle handle )
 }
 
 
-int C_DECL Hlsl2Glsl_Parse( const ShHandle handle,
-                            const char* shaderString,
-                            int options )
+int C_DECL Hlsl2Glsl_Parse(
+	const ShHandle handle,
+	const char* shaderString,
+	ETargetVersion targetVersion,
+	unsigned options)
 {
    if (!InitThread())
       return 0;
@@ -229,12 +337,11 @@ int C_DECL Hlsl2Glsl_Parse( const ShHandle handle,
    if (!shaderString)
 	   return 1;
 
-   TIntermediate intermediate(compiler->infoSink);
    TSymbolTable symbolTable(SymbolTables[compiler->getLanguage()]);
 
    GenerateBuiltInSymbolTable(compiler->infoSink, &symbolTable, compiler->getLanguage());
 
-   TParseContext parseContext(symbolTable, intermediate, compiler->getLanguage(), compiler->infoSink);
+   TParseContext parseContext(symbolTable, compiler->getLanguage(), targetVersion, options, compiler->infoSink);
 
    GlobalParseContext = &parseContext;
 
@@ -264,10 +371,10 @@ int C_DECL Hlsl2Glsl_Parse( const ShHandle handle,
 			aggRoot->setOperator(EOpSequence);
 
 		if (options & ETranslateOpIntermediate)
-			intermediate.outputTree(parseContext.treeRoot);
+			ir_output_tree(parseContext.treeRoot, parseContext.infoSink);
 
 		compiler->TransformAST (parseContext.treeRoot);
-		compiler->ProduceGLSL (parseContext.treeRoot, (options & ETranslateOpUsePrecision) ? true : false);
+		compiler->ProduceGLSL (parseContext.treeRoot, targetVersion, options);
    }
    else if (!success)
    {
@@ -275,10 +382,10 @@ int C_DECL Hlsl2Glsl_Parse( const ShHandle handle,
       parseContext.infoSink.info << parseContext.numErrors << " compilation errors.  No code generated.\n\n";
       success = false;
 	  if (options & ETranslateOpIntermediate)
-         intermediate.outputTree(parseContext.treeRoot);
+         ir_output_tree(parseContext.treeRoot, parseContext.infoSink);
    }
 
-   intermediate.remove(parseContext.treeRoot);
+	ir_remove_tree(parseContext.treeRoot);
 
    //
    // Ensure symbol table is returned to the built-in level,
@@ -297,20 +404,33 @@ int C_DECL Hlsl2Glsl_Parse( const ShHandle handle,
 }
 
 
-int C_DECL Hlsl2Glsl_Translate( const ShHandle handle, const char* entry, int options )
+int C_DECL Hlsl2Glsl_Translate(
+	const ShHandle handle,
+	const char* entry,
+	ETargetVersion targetVersion,
+	unsigned options)
 {
    if (handle == 0)
       return 0;
 
    HlslCrossCompiler* compiler = handle;
    compiler->infoSink.info.erase();
+
+   //ACS: added FixedTargetVersion
+   if (FixedTargetVersion!=ETargetVersionCount) {
+       if(targetVersion!=FixedTargetVersion) {
+           compiler->infoSink.info.message(EPrefixError, "Hlsl2Glsl was initialized with fixed target. Requested target does not match.");
+           return 0;
+       }
+   }
+
 	if (!compiler->IsASTTransformed() || !compiler->IsGlslProduced())
 	{
 		compiler->infoSink.info.message(EPrefixError, "Shader does not have valid object code.");
 		return 0;
 	}
 
-   bool ret = compiler->GetLinker()->link(compiler, entry, (options & ETranslateOpUsePrecision) ? true : false, (options & ETranslateOpOutputFogCoord) ? true : false);
+   bool ret = compiler->GetLinker()->link(compiler, entry, targetVersion, options);
 
    return ret ? 1 : 0;
 }
@@ -387,4 +507,18 @@ int C_DECL Hlsl2Glsl_UseUserVaryings ( ShHandle handle, bool bUseUserVaryings )
 	HlslLinker* linker = handle->GetLinker();
    linker->setUseUserVaryings ( bUseUserVaryings );
    return 1;
+}
+
+
+static bool kVersionUsesPrecision[ETargetVersionCount] = {
+	true,	// ES 1.00
+	false,	// 1.10
+	false,	// 1.20
+    false,	// 1.40
+};
+
+bool C_DECL Hlsl2Glsl_VersionUsesPrecision (ETargetVersion version)
+{
+	assert (version >= 0 && version < ETargetVersionCount);
+	return kVersionUsesPrecision[version];
 }

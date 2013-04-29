@@ -6,11 +6,16 @@
 #ifndef HLSL_SUPPORT_LIB_H
 #define HLSL_SUPPORT_LIB_H
 
+#include <set>
 #include <string>
 #include "../Include/intermediate.h"
+#include "../../include/hlsl2glsl.h" // for ETargetVersion
 
-void initializeHLSLSupportLibrary();
+void initializeHLSLSupportLibrary(ETargetVersion targetVersion);
 void finalizeHLSLSupportLibrary();
-std::string getHLSLSupportCode (TOperator op, std::string& inoutExtensions, bool vertexShader, bool gles);
+
+typedef std::set<std::string> ExtensionSet;
+
+std::string getHLSLSupportCode (TOperator op, ExtensionSet& extensions, bool vertexShader, bool gles);
 
 #endif //HLSL_SUPPORT_LIB_H

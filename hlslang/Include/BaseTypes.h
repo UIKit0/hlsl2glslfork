@@ -41,7 +41,6 @@ enum TBasicType
    EbtGuardSamplerEnd,    // non type:  see implementation of IsSampler()
    EbtTexture,            // HLSL Texture variable (presently just a dummy) 
    EbtStruct,
-   EbtAddress,            // should be deprecated??
 };
 
 __inline bool IsSampler(TBasicType type)
@@ -66,35 +65,14 @@ enum TQualifier
    EvqGlobal,        // For globals read/write
    EvqConst,         // User defined constants and non-output parameters in functions
    EvqStatic,        // Static variables
-   EvqStaticConst,   // Static Readonly variables
    EvqAttribute,     // Readonly 
-   EvqVaryingIn,     // readonly, fragment shaders only
-   EvqVaryingOut,    // vertex shaders only  read/write
    EvqUniform,       // Readonly, vertex and fragment
-   EvqMutableUniform, //HLSL uniform value, that is not really uniform
-
-   // pack/unpack input and output
-   EvqInput,
-   EvqOutput,
+   EvqMutableUniform,// HLSL uniform that is modified by the shader
 
    // parameters
    EvqIn,
    EvqOut,
    EvqInOut,
-   EvqConstReadOnly,
-
-   // built-ins written by vertex shader
-   EvqPosition,
-   EvqPointSize,
-   EvqClipVertex,
-
-   // built-ins read by fragment shader
-   EvqFace,
-   EvqFragCoord,
-
-   // built-ins written by fragment shader
-   EvqFragColor,
-   EvqFragDepth,
 
    // end of list
    EvqLast,
@@ -110,23 +88,11 @@ __inline const char* getQualifierString(TQualifier q)
    case EvqTemporary:      return "Temporary";      break;
    case EvqGlobal:         return "Global";         break;
    case EvqConst:          return "const";          break;
-   case EvqConstReadOnly:  return "const";          break;
    case EvqAttribute:      return "attribute";      break;
-   case EvqVaryingIn:      return "varying";        break;
-   case EvqVaryingOut:     return "varying";        break;
    case EvqUniform:        return "uniform";        break;
    case EvqIn:             return "in";             break;
    case EvqOut:            return "out";            break;
    case EvqInOut:          return "inout";          break;
-   case EvqInput:          return "input";          break;
-   case EvqOutput:         return "output";         break;
-   case EvqPosition:       return "Position";       break;
-   case EvqPointSize:      return "PointSize";      break;
-   case EvqClipVertex:     return "ClipVertex";     break;
-   case EvqFace:           return "Face";           break;
-   case EvqFragCoord:      return "FragCoord";      break;
-   case EvqFragColor:      return "FragColor";      break;
-   case EvqFragDepth:      return "FragDepth";      break;
    default:                return "unknown qualifier";
    }
 }

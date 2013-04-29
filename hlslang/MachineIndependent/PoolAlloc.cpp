@@ -9,76 +9,72 @@
 #include "../Include/InitializeGlobals.h"
 #include "osinclude.h"
 
-OS_TLSIndex PoolIndex;
+static OS_TLSIndex s_TLSPoolAlloc;
+
 
 void InitializeGlobalPools()
 {
-   TThreadGlobalPools* globalPools= static_cast<TThreadGlobalPools*>(OS_GetTLSValue(PoolIndex));    
-   if (globalPools)
-      return;
-
-   TPoolAllocator *globalPoolAllocator = new TPoolAllocator(true);
-
-   TThreadGlobalPools* threadData = new TThreadGlobalPools();
-
-   threadData->globalPoolAllocator = globalPoolAllocator;
-
-   OS_SetTLSValue(PoolIndex, threadData);     
-   globalPoolAllocator->push();
+	TPoolAllocator* alloc = static_cast<TPoolAllocator*>(OS_GetTLSValue(s_TLSPoolAlloc));
+	if (alloc)
+		return;
+	
+	alloc = new TPoolAllocator();
+	OS_SetTLSValue(s_TLSPoolAlloc, alloc);
+	alloc->push();
 }
 
 void FreeGlobalPools()
 {
-   // Release the allocated memory for this thread.
-   TThreadGlobalPools* globalPools= static_cast<TThreadGlobalPools*>(OS_GetTLSValue(PoolIndex));    
-   if (!globalPools)
-      return;
+	TPoolAllocator* alloc = static_cast<TPoolAllocator*>(OS_GetTLSValue(s_TLSPoolAlloc));
+	if (!alloc)
+		return;
 
-   GlobalPoolAllocator.popAll();
-   delete &GlobalPoolAllocator;       
-   delete globalPools;
+	alloc->popAll();
+	delete alloc;
+	OS_SetTLSValue(s_TLSPoolAlloc, NULL);
 }
 
 bool InitializePoolIndex()
 {
-   // Allocate a TLS index.
-   if ((PoolIndex = OS_AllocTLSIndex()) == OS_INVALID_TLS_INDEX)
-      return false;
-
-   return true;
+	if ((s_TLSPoolAlloc = OS_AllocTLSIndex()) == OS_INVALID_TLS_INDEX)
+		return false;
+	return true;
 }
 
 void FreePoolIndex()
 {
-   // Release the TLS index.
-   OS_FreeTLSIndex(PoolIndex);
+	OS_FreeTLSIndex(s_TLSPoolAlloc);
 }
 
 TPoolAllocator& GetGlobalPoolAllocator()
 {
-   TThreadGlobalPools* threadData = static_cast<TThreadGlobalPools*>(OS_GetTLSValue(PoolIndex));
-
-   return *threadData->globalPoolAllocator;
+	TPoolAllocator* alloc = static_cast<TPoolAllocator*>(OS_GetTLSValue(s_TLSPoolAlloc));
+	return *alloc;
 }
 
-void SetGlobalPoolAllocatorPtr(TPoolAllocator* poolAllocator)
+void SetGlobalPoolAllocatorPtr(TPoolAllocator* alloc)
 {
-   TThreadGlobalPools* threadData = static_cast<TThreadGlobalPools*>(OS_GetTLSValue(PoolIndex));
-
-   threadData->globalPoolAllocator = poolAllocator;
+	OS_SetTLSValue(s_TLSPoolAlloc, alloc);
 }
 
-//
-// Implement the functionality of the TPoolAllocator class, which
-// is documented in PoolAlloc.h.
-//
-TPoolAllocator::TPoolAllocator(bool g, int growthIncrement, int allocationAlignment) : 
-global(g),
-pageSize(growthIncrement),
-alignment(allocationAlignment),
+
+
+
+struct TPoolAllocator::AllocHeader
+{
+	AllocHeader(AllocHeader* np, size_t pcount) : nextPage(np), pageCount(pcount) { }
+	AllocHeader* nextPage;
+	size_t pageCount;
+};
+
+
+TPoolAllocator::TPoolAllocator() :
+pageSize(8*1024),
+alignment(16),
 freeList(0),
 inUseList(0),
-numCalls(0)
+numCalls(0),
+totalBytes(0)
 {
    //
    // Don't allow page sizes we know are smaller than all common
@@ -111,47 +107,31 @@ numCalls(0)
    // Align header skip
    //
    headerSkip = minAlign;
-   if (headerSkip < sizeof(tHeader))
+   if (headerSkip < sizeof(AllocHeader))
    {
-      headerSkip = (sizeof(tHeader) + alignmentMask) & ~alignmentMask;
+      headerSkip = (sizeof(AllocHeader) + alignmentMask) & ~alignmentMask;
    }
 }
 
 TPoolAllocator::~TPoolAllocator()
 {
-   if (!global)
-   {
-      //
-      // Then we know that this object is not being 
-      // allocated after other, globally scoped objects
-      // that depend on it.  So we can delete the "in use" memory.
-      //
-      while (inUseList)
-      {
-         tHeader* next = inUseList->nextPage;
-         inUseList->~tHeader();
-         delete [] reinterpret_cast<char*>(inUseList);
-         inUseList = next;
-      }
-   }
+	assert(inUseList == NULL);
 
-   //
-   // Always delete the free list memory - it can't be being
-   // (correctly) referenced, whether the pool allocator was
-   // global or not.
-   //
-   while (freeList)
-   {
-      tHeader* next = freeList->nextPage;
-      delete [] reinterpret_cast<char*>(freeList);
-      freeList = next;
-   }
+	// Always delete the free list memory - it can't be being
+	// (correctly) referenced, whether the pool allocator was
+	// global or not.
+	while (freeList)
+	{
+		AllocHeader* next = freeList->nextPage;
+		delete [] reinterpret_cast<char*>(freeList);
+		freeList = next;
+	}
 }
 
 
 void TPoolAllocator::push()
 {
-   tAllocState state = { currentPageOffset, inUseList};
+   AllocState state = { currentPageOffset, inUseList };
 
    stack.push_back(state);
 
@@ -173,15 +153,15 @@ void TPoolAllocator::pop()
    if (stack.size() < 1)
       return;
 
-   tHeader* page = stack.back().page;
+   AllocHeader* page = stack.back().page;
    currentPageOffset = stack.back().offset;
 
    while (inUseList != page)
    {
       // invoke destructor to free allocation list
-      inUseList->~tHeader();
+      inUseList->~AllocHeader();
 
-      tHeader* nextInUse = inUseList->nextPage;
+      AllocHeader* nextInUse = inUseList->nextPage;
       if (inUseList->pageCount > 1)
          delete [] reinterpret_cast<char*>(inUseList);
       else
@@ -238,12 +218,12 @@ void* TPoolAllocator::allocate(size_t numBytes)
       // The OS is efficient and allocating and free-ing multiple pages.
       //
       size_t numBytesToAlloc = allocationSize + headerSkip;
-      tHeader* memory = reinterpret_cast<tHeader*>(::new char[numBytesToAlloc]);
+      AllocHeader* memory = reinterpret_cast<AllocHeader*>(::new char[numBytesToAlloc]);
       if (memory == 0)
          return 0;
 
       // Use placement-new to initialize header
-      new(memory) tHeader(inUseList, (numBytesToAlloc + pageSize - 1) / pageSize);
+      new(memory) AllocHeader(inUseList, (numBytesToAlloc + pageSize - 1) / pageSize);
       inUseList = memory;
 
       currentPageOffset = pageSize;  // make next allocation come from a new page
@@ -254,7 +234,7 @@ void* TPoolAllocator::allocate(size_t numBytes)
    //
    // Need a simple page to allocate from.
    //
-   tHeader* memory;
+   AllocHeader* memory;
    if (freeList)
    {
       memory = freeList;
@@ -262,13 +242,13 @@ void* TPoolAllocator::allocate(size_t numBytes)
    }
    else
    {
-      memory = reinterpret_cast<tHeader*>(::new char[pageSize]);
+      memory = reinterpret_cast<AllocHeader*>(::new char[pageSize]);
       if (memory == 0)
          return 0;
    }
 
    // Use placement-new to initialize header
-   new(memory) tHeader(inUseList, 1);
+   new(memory) AllocHeader(inUseList, 1);
    inUseList = memory;
 
    unsigned char* ret = reinterpret_cast<unsigned char *>(inUseList) + headerSkip;

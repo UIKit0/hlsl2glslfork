@@ -17,94 +17,98 @@
 class GlslFunction 
 {
 public:
-   GlslFunction (const std::string &n, const std::string &m, EGlslSymbolType type, TPrecision precision, const std::string &s, const TSourceLoc& line);
-   virtual ~GlslFunction();
-   
-   void addSymbol( GlslSymbol *sym );   
-   void addParameter( GlslSymbol *sym );
-   
-   bool hasSymbol( int id );
-   GlslSymbol& getSymbol( int id );
-   
-   std::string getPrototype();
-   std::string getLocalDecls( int indentLevel );
+	GlslFunction (const std::string& n, const std::string& m, EGlslSymbolType type, TPrecision precision, const std::string &s, const TSourceLoc& line);
+	virtual ~GlslFunction();
 
-   /// Returns, as a string, the mutable declarations in the function.  Takes a set of other functions to
-   /// check whether the mutable has already been declared.
-   std::string getMutableDecls( int indentLevel, std::vector<GlslFunction*>::iterator funcBegin, 
-                                                 std::vector<GlslFunction*>::iterator funcEnd );
+	void addSymbol( GlslSymbol *sym );   
+	void addParameter( GlslSymbol *sym );
 
-   /// Returns the active scope
-   std::string getCode() { return active.str(); }
+	bool isGlobalScopeFunction() const { return name == "__global__"; }
 
-   int getParameterCount() { return (int)parameters.size();}   
-   GlslSymbol* getParameter( int i ) { return parameters[i];}
-   
-   void addCalledFunction( const std::string& func ) { calledFunctions.insert(func); }
-   const std::set<std::string>& getCalledFunctions() const  { return calledFunctions; }
-   
-   void addLibFunction( TOperator op ) { libFunctions.insert( op); }
-   const std::set<TOperator>& getLibFunctions() const { return libFunctions; }
-   
-   const std::vector<GlslSymbol*>& getSymbols() { return symbols; }
+	bool hasSymbol( int id ) const;
+	GlslSymbol& getSymbol( int id );
 
-   void increaseDepth() { depth++; }   
-   void decreaseDepth() { depth = depth ? depth-1 : depth; }
+	std::string getPrototype() const;
 
-   void indent( std::stringstream &s ) { for (int ii = 0; ii < depth; ii++) s << "    "; }
-   void indent() { indent(active); }
-   
-   void beginBlock( bool brace = true) { if (brace) active << "{\n"; increaseDepth(); inStatement = false; }
-   void endBlock() { endStatement(); decreaseDepth(); indent(); active << "}\n";  }
-   
-   void beginStatement() { if (!inStatement) { indent(); inStatement = true;}}
-   void endStatement() { if (inStatement) { active << ";\n"; inStatement = false;}}
+	/// Returns the active scope
+	std::string getCode() const { return active->str(); }
 
-   const std::string &getName() { return name; }
-   const std::string &getMangledName() { return mangledName; }
+	int getParameterCount() { return (int)parameters.size();}   
+	GlslSymbol* getParameter( int i ) { return parameters[i];}
 
-   EGlslSymbolType getReturnType() { return returnType; }
-   TPrecision getPrecision() const { return precision; }
-   const std::string& getSemantic() const { return semantic; }    
-   GlslStruct* getStruct() { return structPtr; }   
-   void setStruct( GlslStruct *s ) { structPtr = s;}
+	void addCalledFunction( const std::string& func ) { calledFunctions.insert(func); }
+	const std::set<std::string>& getCalledFunctions() const  { return calledFunctions; }
 
-   std::stringstream& getActiveOutput () { return active; }
-   const TSourceLoc& getLine() const { return line; }
-   
-protected:
+	void addLibFunction( TOperator op ) { libFunctions.insert( op); }
+	const std::set<TOperator>& getLibFunctions() const { return libFunctions; }
 
-   // Function info
-   std::string name;
-   std::string mangledName;
-   EGlslSymbolType returnType;
-   TPrecision precision;
-   std::string semantic;
-   TSourceLoc line;
+	const std::vector<GlslSymbol*>& getSymbols() const { return symbols; }
 
-   // Structure return value
-   GlslStruct *structPtr;  
+	void increaseDepth() { depth.back()++; }   
+	void decreaseDepth() { depth.back() = depth.back() ? depth.back()-1 : depth.back(); }
 
-   // Present indent depth
-   int depth; 
+	void pushDepth(int depth);
+	void popDepth();
 
-   // These are the symbols referenced
-   std::vector<GlslSymbol*> symbols;
-   std::map<std::string,GlslSymbol*> symbolNameMap;
-   std::map<int,GlslSymbol*> symbolIdMap;
-   std::vector<GlslSymbol*> parameters;
+	void indent( std::stringstream &s ) { for (int ii = 0; ii < depth.back(); ii++) s << "    "; }
+	void indent() { indent(*active); }
 
-   // Functions called by this function
-   std::set<std::string> calledFunctions;
+	void beginBlock( bool brace = true) { if (brace) *active << "{\n"; increaseDepth(); inStatement = false; }
+	void endBlock() { endStatement(); decreaseDepth(); indent(); *active << "}\n";  }
 
-   // Built-in functions needing the support lib that were called
-   std::set<TOperator> libFunctions;
+	void beginStatement() { if (!inStatement) { indent(); inStatement = true;}}
+	void endStatement() { if (inStatement) { *active << ";\n"; inStatement = false;}}
 
-   // Stores the active output of the function
-   std::stringstream active;
+	const std::string& getName() const { return name; }
+	const std::string& getMangledName() const { return mangledName; }
 
-   bool inStatement;    
+	EGlslSymbolType getReturnType() const { return returnType; }
+	TPrecision getPrecision() const { return precision; }
+	const std::string& getSemantic() const { return semantic; }    
+	GlslStruct* getStruct() { return structPtr; }   
+	void setStruct( GlslStruct *s ) { structPtr = s;}
+	void setActiveOutput(std::stringstream* output) { active = output; }
+	std::stringstream& getActiveOutput () { return *active; }
+	const TSourceLoc& getLine() const { return line; }
 
+	typedef std::set<std::string> ExtensionSet;
+	void addNeededExtensions (ExtensionSet& extensions, ETargetVersion version) const;
+
+private:
+	void mangleSymbolName (GlslSymbol *sym);
+	
+private:
+
+	// Function info
+	std::string name;
+	std::string mangledName;
+	EGlslSymbolType returnType;
+	TPrecision precision;
+	std::string semantic;
+	TSourceLoc line;
+
+	// Structure return value
+	GlslStruct *structPtr;  
+
+	// Present indent depth
+	std::vector<int> depth; 
+
+	// These are the symbols referenced
+	std::vector<GlslSymbol*> symbols;
+	std::map<std::string,GlslSymbol*> symbolNameMap;
+	std::map<int,GlslSymbol*> symbolIdMap;
+	std::vector<GlslSymbol*> parameters;
+
+	// Functions called by this function
+	std::set<std::string> calledFunctions;
+
+	// Built-in functions needing the support lib that were called
+	std::set<TOperator> libFunctions;
+
+	// Stores the active output of the function
+	std::stringstream* active;
+
+	bool inStatement;
 };
 
 #endif //GLSL_FUNCTION_H

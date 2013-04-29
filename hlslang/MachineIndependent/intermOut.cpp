@@ -39,9 +39,9 @@ TString TType::getCompleteString() const
    if (array)
       p += sprintf(p, " array");
    if (matrix)
-      p += sprintf(p, "matrix%dX%d", size, size);
-   else if (size > 1)
-      p += sprintf(p, "vec%d", size);
+      p += sprintf(p, "matrix%dX%d", matcols, matrows);
+   else if (matrows > 1)
+      p += sprintf(p, "vec%d", matrows);
 
    return TString(buf);
 }   
@@ -139,7 +139,6 @@ bool OutputBinary(bool, /* preVisit */ TIntermBinary* node, TIntermTraverser* it
    case EOpLogicalOr:  out.debug << "||";   break;
    case EOpLogicalXor: out.debug << "^^"; break;
    case EOpLogicalAnd: out.debug << "&&"; break;
-   case EOpInitialize: out.debug << "init"; break;
    default: out.debug << "<unknown op>";
    }
 
@@ -255,12 +254,19 @@ bool OutputAggregate(bool, /* preVisit */ TIntermAggregate* node, TIntermTravers
    case EOpConstructIVec2: out.debug << "Construct ivec2"; break;
    case EOpConstructIVec3: out.debug << "Construct ivec3"; break;
    case EOpConstructIVec4: out.debug << "Construct ivec4"; break;
-   case EOpConstructMat2:  out.debug << "Construct mat2";  break;
-   case EOpConstructMat3:  out.debug << "Construct mat3";  break;
-   case EOpConstructMat4:  out.debug << "Construct mat4";  break;
+
+   case EOpConstructMat2x2:  out.debug << "Construct mat2x2";  break;
+   case EOpConstructMat2x3:  out.debug << "Construct mat2x3";  break;
+   case EOpConstructMat2x4:  out.debug << "Construct mat2x4";  break;
+   case EOpConstructMat3x2:  out.debug << "Construct mat3x2";  break;
+   case EOpConstructMat3x3:  out.debug << "Construct mat3x3";  break;
+   case EOpConstructMat3x4:  out.debug << "Construct mat3x4";  break;
+   case EOpConstructMat4x2:  out.debug << "Construct mat4x2";  break;
+   case EOpConstructMat4x3:  out.debug << "Construct mat4x3";  break;
+   case EOpConstructMat4x4:  out.debug << "Construct mat4x4";  break;
    case EOpConstructStruct:  out.debug << "Construct struc";  break;
-   case EOpConstructMat2FromMat: out.debug << "Construct mat2 from mat"; break;
-   case EOpConstructMat3FromMat: out.debug << "Construct mat3 from mat"; break;
+   case EOpConstructMat2x2FromMat: out.debug << "Construct mat2 from mat"; break;
+   case EOpConstructMat3x3FromMat: out.debug << "Construct mat3 from mat"; break;
    case EOpMatrixIndex: out.debug << "Matrix index"; break;
    case EOpMatrixIndexDynamic: out.debug << "Matrix index dynamic"; break;
 
@@ -368,20 +374,20 @@ bool OutputSelection(bool, /* preVisit */ TIntermSelection* node, TIntermTravers
    return false;
 }
 
-void OutputConstantUnion(TIntermConstantUnion* node, TIntermTraverser* it)
+void OutputConstant(TIntermConstant* node, TIntermTraverser* it)
 {
    TOutputTraverser* oit = static_cast<TOutputTraverser*>(it);
    TInfoSink& out = oit->infoSink;
 
-   int size = node->getType().getObjectSize();
+   int size = node->getCount();
 
    for (int i = 0; i < size; i++)
    {
       OutputTreeText(out, node, oit->depth);
-      switch (node->getUnionArrayPointer()[i].getType())
+      switch (node->getValue(i).type)
       {
       case EbtBool:
-         if (node->getUnionArrayPointer()[i].getBConst())
+         if (node->toBool(i))
             out.debug << "true";
          else
             out.debug << "false";
@@ -393,15 +399,15 @@ void OutputConstantUnion(TIntermConstantUnion* node, TIntermTraverser* it)
       case EbtFloat:
          {
             char buf[300];
-            sprintf(buf, "%f (%s)", node->getUnionArrayPointer()[i].getFConst(), "const float");
+            sprintf(buf, "%f (%s)", node->toFloat(i), "const float");
 
-            out.debug << buf << "\n";           
+            out.debug << buf << "\n";
          }
          break;
       case EbtInt:
          {
             char buf[300];
-            sprintf(buf, "%d (%s)", node->getUnionArrayPointer()[i].getIConst(), "const int");
+            sprintf(buf, "%d (%s)", node->toInt(i), "const int");
 
             out.debug << buf << "\n";
             break;
@@ -486,12 +492,8 @@ bool OutputBranch(bool, /* previsit*/ TIntermBranch* node, TIntermTraverser* it)
    return false;
 }
 
-//
-// This function is the one to call externally to start the traversal.
-// Individual functions can be initialized to 0 to skip processing of that
-// type of node.  It's children will still be processed.
-//
-void TIntermediate::outputTree(TIntermNode* root)
+
+void ir_output_tree(TIntermNode* root, TInfoSink& infoSink)
 {
    if (root == 0)
       return;
@@ -500,7 +502,7 @@ void TIntermediate::outputTree(TIntermNode* root)
 
    it.visitAggregate = OutputAggregate;
    it.visitBinary = OutputBinary;
-   it.visitConstantUnion = OutputConstantUnion;
+   it.visitConstant = OutputConstant;
    it.visitSelection = OutputSelection;
    it.visitSymbol = OutputSymbol;
    it.visitUnary = OutputUnary;

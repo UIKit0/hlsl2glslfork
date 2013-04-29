@@ -28,10 +28,21 @@ void TIntermSymbol::traverse(TIntermTraverser* it)
       it->visitSymbol(this, it);
 }
 
-void TIntermConstantUnion::traverse(TIntermTraverser* it)
+void TIntermDeclaration::traverse(TIntermTraverser* it)
+{	
+	if (it->preVisit && it->visitDeclaration && !it->visitDeclaration(true, this, it))
+		return;
+	
+	_declaration->traverse(it);
+	
+	if (it->postVisit && it->visitDeclaration)
+		it->visitDeclaration(false, this, it);
+}
+
+void TIntermConstant::traverse(TIntermTraverser* it)
 {
-   if (it->visitConstantUnion)
-      it->visitConstantUnion(this, it);
+   if (it->visitConstant)
+      it->visitConstant(this, it);
 }
 
 //
@@ -103,8 +114,8 @@ void TIntermAggregate::traverse(TIntermTraverser* it)
    {
       ++it->depth;
 
-      TIntermSequence::iterator sit;
-      for (sit = sequence.begin(); sit != sequence.end(); ++sit)
+      TNodeArray::iterator sit;
+      for (sit = nodes.begin(); sit != nodes.end(); ++sit)
          (*sit)->traverse(it);
 
       --it->depth;
