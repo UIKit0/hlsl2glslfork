@@ -357,7 +357,7 @@ bool HlslLinker::getArgumentData2( const std::string &name, const std::string &s
 
 		case EClassVarOut:
 			// If using user varyings, create a user varying name
-			if ( (bUserVaryings && sem != EAttrSemPosition && sem != EAttrSemPrimitiveID) || varOutString[sem][0] == 0 )
+			if ( (bUserVaryings && sem != EAttrSemPosition && sem != EAttrSemPrimitiveID && sem != EAttrSemPSize) || varOutString[sem][0] == 0 )
 			{
 				outName = kUserVaryingPrefix;
 				outName += semantic;
