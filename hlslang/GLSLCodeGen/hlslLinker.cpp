@@ -373,9 +373,17 @@ bool HlslLinker::getArgumentData2( const std::string &name, const std::string &s
 				// Use built-in varying name
 				outName = varOutString[sem];
 
-				// Always pad built-in varying outputs to 4 elements
-				pad = 4 - size;
-				ctor = "vec4";
+                if (sem == EAttrSemPSize)
+                {
+                    pad = 0;
+                    ctor = "float";
+                }
+                else
+                {
+                    // Always pad built-in varying outputs to 4 elements
+                    pad = 4 - size;
+                    ctor = "vec4";
+                }
 			}
 			break;
 
