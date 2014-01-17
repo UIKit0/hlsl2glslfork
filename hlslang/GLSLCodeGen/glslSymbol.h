@@ -12,7 +12,7 @@
 class GlslSymbol 
 {
 public:
-	GlslSymbol( const std::string &n, const std::string &s, int id, EGlslSymbolType t, TPrecision precision, EGlslQualifier q, int as = 0 );
+	GlslSymbol( const std::string &n, const std::string &s, const std::string &r, int id, EGlslSymbolType t, TPrecision precision, EGlslQualifier q, int as = 0 );
 
 	bool getIsParameter() const { return isParameter; }
 	void setIsParameter( bool param ) { isParameter = param; }
@@ -27,6 +27,8 @@ public:
 
 	bool hasSemantic() const { return (semantic.size() > 0); }
 	const std::string &getSemantic() const { return semantic; }
+
+	const std::string &getRegister() const { return registerSpec; }
 
 	int getId() const { return identifier; }
 
@@ -61,6 +63,7 @@ private:
 	std::string mangledName;
 	std::string mutableMangledName;
 	std::string semantic;
+	std::string registerSpec;
 	int identifier;
 	EGlslSymbolType type;
 	EGlslQualifier qual;

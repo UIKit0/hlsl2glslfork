@@ -22,8 +22,9 @@ static bool IsReservedGlslKeyword (const std::string& name)
 }
 
 
-GlslSymbol::GlslSymbol( const std::string &n, const std::string &s, int id, EGlslSymbolType t, TPrecision prec, EGlslQualifier q, int as ) :
+GlslSymbol::GlslSymbol( const std::string &n, const std::string &s, const std::string &r, int id, EGlslSymbolType t, TPrecision prec, EGlslQualifier q, int as ) :
    semantic(s),
+   registerSpec(r),
    identifier(id),
    type(t),
    precision(prec),

@@ -585,10 +585,15 @@ void TGlslOutputTraverser::traverseSymbol(TIntermSymbol *node, TIntermTraverser 
 		{
 			int array = node->getTypePointer()->isArray() ? node->getTypePointer()->getArraySize() : 0;
 			const char* semantic = "";
+			const char* registerSpec = "";
+
 			if (node->getInfo())
+			{
 				semantic = node->getInfo()->getSemantic().c_str();
+				registerSpec = node->getInfo()->getRegister().c_str();
+			}
 			
-			GlslSymbol * sym = new GlslSymbol( node->getSymbol().c_str(), semantic, node->getId(),
+			GlslSymbol * sym = new GlslSymbol( node->getSymbol().c_str(), semantic, registerSpec, node->getId(),
 				translateType(node->getTypePointer()), goit->m_UsePrecision?node->getPrecision():EbpUndefined, translateQualifier(node->getQualifier()), array);
 			sym->setIsGlobal(node->isGlobal());
 
@@ -614,9 +619,13 @@ void TGlslOutputTraverser::traverseParameterSymbol(TIntermSymbol *node, TIntermT
 
    int array = node->getTypePointer()->isArray() ? node->getTypePointer()->getArraySize() : 0;
    const char* semantic = "";
+   const char* registerSpec = "";
    if (node->getInfo())
+   {
       semantic = node->getInfo()->getSemantic().c_str();
-   GlslSymbol * sym = new GlslSymbol( node->getSymbol().c_str(), semantic, node->getId(),
+      registerSpec = node->getInfo()->getRegister().c_str();
+   }
+   GlslSymbol * sym = new GlslSymbol( node->getSymbol().c_str(), semantic, registerSpec, node->getId(),
                                       translateType(node->getTypePointer()), goit->m_UsePrecision?node->getPrecision():EbpUndefined, translateQualifier(node->getQualifier()), array);
    current->addParameter(sym);
 
