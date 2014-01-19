@@ -19,6 +19,7 @@ static const char* kTargetVersionStrings[ETargetVersionCount] = {
 	"", // 1.10
 	"#version 120\n", // 1.20
     "#version 140\n", // 1.40
+	"", // ES 3.0 - #version 300 es is added later in shader build pipe
 };
 
 
@@ -245,15 +246,60 @@ static const char* resultString[EAttrSemCount] = {
 
 static const char* kUserVaryingPrefix = "xlv_";
 
-static inline void AddToVaryings (std::stringstream& s, TPrecision prec, const std::string& type, const std::string& name)
+static inline const char* GetVertexInputQualifier (ETargetVersion targetVersion)
+{
+	return targetVersion>=ETargetGLSL_ES_300 ? "in" : "attribute";
+}
+
+static inline const char* GetVertexOutputQualifier (ETargetVersion targetVersion)
+{
+	return targetVersion>=ETargetGLSL_ES_300 ? "out" : "varying";
+}
+
+static inline const char* GetFragmentInputQualifier (ETargetVersion targetVersion)
+{
+	return targetVersion>=ETargetGLSL_ES_300 ? "in" : "varying";
+}
+
+static inline void AddVertexOutput (std::stringstream& s, ETargetVersion targetVersion, TPrecision prec, const std::string& type, const std::string& name)
 {
 	if (strstr (name.c_str(), kUserVaryingPrefix) == name.c_str())
-		s << "varying " << getGLSLPrecisiontring(prec) << type << " " << name << ";\n";
+		s << GetVertexOutputQualifier(targetVersion) << " " << getGLSLPrecisiontring(prec) << type << " " << name << ";\n";
 }
+
+static inline void AddFragmentInput (std::stringstream& s, ETargetVersion targetVersion, TPrecision prec, const std::string& type, const std::string& name)
+{
+	if (strstr (name.c_str(), kUserVaryingPrefix) == name.c_str())
+		s << GetFragmentInputQualifier(targetVersion) << " " << getGLSLPrecisiontring(prec) << type << " " << name << ";\n";
+}
+
+static inline void AddToVaryings (std::stringstream& s, EShLanguage language, ETargetVersion targetVersion, TPrecision prec, const std::string& type, const std::string& name)
+{
+	if (language == EShLangVertex)
+		AddVertexOutput(s, targetVersion, prec, type, name);
+	else
+		AddFragmentInput(s, targetVersion, prec, type, name);
+}
+
+static inline bool UsesBuiltinAttribStrings(ETargetVersion targetVersion, unsigned options)
+{
+	if (options & ETranslateOpAvoidBuiltinAttribNames)
+		return false;
+	if (options & ETranslateOpForceBuiltinAttribNames)
+		return true;
+	
+	// Later non-ES targets should also return false for this.
+	return (targetVersion == ETargetGLSL_ES_100
+		 || targetVersion == ETargetGLSL_ES_300)
+		 ? false
+		 : true;
+}
+
 
 HlslLinker::HlslLinker(TInfoSink& infoSink_)
 : infoSink(infoSink_)
 , m_Target(ETargetVersionCount)
+, m_Options(0)
 {
 	for ( int i = 0; i < EAttrSemCount; i++)
 	{
@@ -277,16 +323,57 @@ HlslLinker::~HlslLinker()
 }
 
 
+void HlslLinker::getAttributeName( GlslSymbolOrStructMemberBase const* symOrStructMember, std::string &outName, EAttribSemantic sem, int semanticOffset )
+{
+	if (m_Options & ETranslateOpPropogateOriginalAttribNames && !UsesBuiltinAttribStrings(m_Target, m_Options))
+	{
+		GlslSymbolOrStructMemberBase const* dominant =	 (symOrStructMember->outputSuppressedBy())
+														? symOrStructMember->outputSuppressedBy()
+														: symOrStructMember;
+		outName = dominant->baseName+dominant->name;
+		if ( semanticOffset > 0 )
+			outName += ( semanticOffset + '0' );
+	}
+	else
+	{
+		if ( semanticOffset > 0 )
+			sem = (EAttribSemantic)((int)sem+semanticOffset);
+		// If the user has specified a user attrib name, use a user attribute
+		if ( userAttribString[sem][0] != '\0' )
+		{
+			outName = userAttribString[sem];
+		}
+		// Otherwise, use the built-in attribute name
+		else
+		{
+			outName = UsesBuiltinAttribStrings(m_Target, m_Options) ? attribString[sem] : "\0";
+			if ( sem == EAttrSemUnknown || outName[0] == '\0' )
+			{
+				//handle the blind data
+				outName = "xlat_attrib_";
+				outName += symOrStructMember->semantic;
+			}
+		}
+	}
+}
 
-bool HlslLinker::getArgumentData2( const std::string &name, const std::string &semantic, EGlslSymbolType type,
+bool HlslLinker::getArgumentData2( GlslSymbolOrStructMemberBase const* symOrStructMember,
 								 EClassifier c, std::string &outName, std::string &ctor, int &pad, int semanticOffset)
 {
 	int size;
 	EGlslSymbolType base = EgstVoid;
-	EAttribSemantic sem = parseAttributeSemantic( semantic );
+	// Get the type before suppression because we may not want all of the elements.
+	// note, suppressedBy should *never* be smaller than the suppressed.
+	EGlslSymbolType type = symOrStructMember->type;
+	GlslSymbolOrStructMemberBase const* suppressedBy = symOrStructMember->outputSuppressedBy();
+	if (suppressedBy)
+		symOrStructMember = suppressedBy;
+	EAttribSemantic sem = parseAttributeSemantic( symOrStructMember->semantic );
+	const std::string& semantic = symOrStructMember->semantic;
 
 	// Offset the semantic for the case of an array
-	sem = static_cast<EAttribSemantic>( (int)sem + semanticOffset );
+	if ( semanticOffset > 0 )
+		sem = static_cast<EAttribSemantic>( (int)sem + semanticOffset );
 
 	//clear the return values
 	outName = "";
@@ -336,34 +423,20 @@ bool HlslLinker::getArgumentData2( const std::string &name, const std::string &s
 			return false;
 
 		case EClassAttrib:
-			// If the user has specified a user attrib name, use a user attribute
-			if ( userAttribString[sem][0] != '\0')
-			{
-				outName = userAttribString[sem];
-			}
-			// Otherwise, use the built-in attribute name
-			else
-			{
-				outName = attribString[sem];
-				if (sem == EAttrSemNormal && size == 4)
-					pad = 1;
-				else if ( sem == EAttrSemUnknown || outName[0] == '\0' )
-				{
-					//handle the blind data
-					outName = "xlat_attrib_";
-					outName += semantic;
-				}
-			}
+			getAttributeName( symOrStructMember, outName, sem, semanticOffset );
+			if (outName == "gl_Normal" && size == 4)
+				pad = 1;
 			break;
 
 		case EClassVarOut:
 			// If using user varyings, create a user varying name
+			// WHY ON EARTH such funny if
 			if ( (bUserVaryings && sem != EAttrSemPosition && sem != EAttrSemPrimitiveID && sem != EAttrSemPSize) || varOutString[sem][0] == 0 )
 			{
 				outName = kUserVaryingPrefix;
 				outName += semantic;
 				// If an array element, add the semantic offset to the name
-				if ( semanticOffset != 0 )
+				if ( semanticOffset > 0 )
 				{
 					outName += "_";
 					outName += ( semanticOffset + '0' );
@@ -374,17 +447,13 @@ bool HlslLinker::getArgumentData2( const std::string &name, const std::string &s
 				// Use built-in varying name
 				outName = varOutString[sem];
 
-                if (sem == EAttrSemPSize)
-                {
-                    pad = 0;
-                    ctor = "float";
-                }
-                else
-                {
-                    // Always pad built-in varying outputs to 4 elements
-                    pad = 4 - size;
-                    ctor = "vec4";
-                }
+				// Always pad built-in varying outputs to 4 elements
+				// exception: psize must be kept float1
+				if(sem != EAttrSemPSize)
+				{
+					pad = 4 - size;
+					ctor = "vec4";
+				}
 			}
 			break;
 
@@ -395,7 +464,7 @@ bool HlslLinker::getArgumentData2( const std::string &name, const std::string &s
 				outName = kUserVaryingPrefix;
 				outName += stripSemanticModifier (semantic, false);
 				// If an array element, add the semantic offset to the name
-				if ( semanticOffset != 0 )
+				if ( semanticOffset > 0 )
 				{
 					outName += "_";
 					outName += ( semanticOffset + '0' );
@@ -439,7 +508,7 @@ bool HlslLinker::getArgumentData2( const std::string &name, const std::string &s
 	{
 		//these should always match exactly
 		outName = "xlu_";
-		outName += name;
+		outName += symOrStructMember->name;
 	}
 
 	return true;
@@ -449,11 +518,7 @@ bool HlslLinker::getArgumentData2( const std::string &name, const std::string &s
 bool HlslLinker::getArgumentData( GlslSymbol* sym, EClassifier c, std::string &outName,
 								 std::string &ctor, int &pad)
 {
-	const std::string &name = sym->getName();
-	const std::string &semantic = sym->getSemantic();
-	EGlslSymbolType type = sym->getType();
-
-	return getArgumentData2( name, semantic, type, c, outName, ctor, pad, 0);
+	return getArgumentData2( sym, c, outName, ctor, pad, -1);
 }
 
 
@@ -621,12 +686,8 @@ static void EmitCalledFunctions (std::stringstream& shader, const FunctionSet& f
 	if (functions.empty())
 		return;
 
-	for (FunctionSet::const_reverse_iterator fit = functions.rbegin(); fit != functions.rend(); fit++) // emit backwards, will put least used ones in front
-	{
-		shader << (*fit)->getPrototype() << ";\n";
-	}
-
-	for (FunctionSet::const_reverse_iterator fit = functions.rbegin(); fit != functions.rend(); fit++) // emit backwards, will put least used ones in front
+	// Functions must be emitted in reverse order as they are sorted topologically in top to bottom.
+	for (FunctionSet::const_reverse_iterator fit = functions.rbegin(); fit != functions.rend(); fit++)
 	{
 		shader << "\n";
 		OutputLineDirective(shader, (*fit)->getLine());
@@ -654,12 +715,21 @@ static const char* GetEntryName (const char* entryFunc)
 static const char* kShaderTypeNames[2] = { "Vertex", "Fragment" };
 
 
-static void add_extension_from_semantic(EAttribSemantic sem, ExtensionSet& extensions)
+static void add_extension_from_semantic(EAttribSemantic sem, ETargetVersion targetVersion, ExtensionSet& extensions)
 {
-	if (sem == EAttrSemPrimitiveID || sem == EAttrSemVertexID)
-		extensions.insert("GL_EXT_gpu_shader4");
-	if (sem == EAttrSemInstanceID)
-		extensions.insert("GL_ARB_draw_instanced");
+	if (targetVersion == ETargetGLSL_ES_300)
+	{
+		// \todo [2013-05-14 pyry] Not supported in any platform yet.
+		if (sem == EAttrSemPrimitiveID)
+			extensions.insert("GL_ARB_geometry_shader4");
+	}
+	else
+	{
+		if (sem == EAttrSemPrimitiveID || sem == EAttrSemVertexID)
+			extensions.insert("GL_EXT_gpu_shader4");
+		if (sem == EAttrSemInstanceID)
+			extensions.insert("GL_ARB_draw_instanced");
+	}
 }
 
 
@@ -678,6 +748,71 @@ bool HlslLinker::linkerSanityCheck(HlslCrossCompiler* compiler, const char* entr
 	return true;
 }
 
+typedef std::map<std::string, int> FunctionUseCounts;
+
+static GlslFunction* resolveFunctionByMangledName (const std::vector<GlslFunction*>& functions, const std::string& mangledName)
+{
+	for (std::vector<GlslFunction*>::const_iterator iter = functions.begin(); iter != functions.end(); ++iter)
+	{
+		if ((*iter)->getMangledName() == mangledName)
+			return *iter;
+	}
+	return 0;
+}
+
+static bool sortFunctionsTopologically (std::vector<GlslFunction*>& dst, const std::vector<GlslFunction*>& src)
+{
+	dst.clear();
+
+	// Build function use counts.
+	FunctionUseCounts useCounts;
+	for (std::vector<GlslFunction*>::const_iterator funcIter = src.begin(); funcIter != src.end(); ++funcIter)
+		useCounts[(*funcIter)->getMangledName()] = 0;
+
+	for (std::vector<GlslFunction*>::const_iterator funcIter = src.begin(); funcIter != src.end(); ++funcIter)
+	{
+		std::set<std::string> calledNames = (*funcIter)->getCalledFunctions();
+		for (std::set<std::string>::const_iterator callIter = calledNames.begin(); callIter != calledNames.end(); ++callIter)
+			useCounts[*callIter] += 1;
+	}
+
+	std::vector<GlslFunction*> liveSet;
+
+	// Init live set with functions that have use count 0 (should be only main())
+	for (std::vector<GlslFunction*>::const_iterator funcIter = src.begin(); funcIter != src.end(); ++funcIter)
+	{
+		if (useCounts[(*funcIter)->getMangledName()] == 0)
+			liveSet.push_back(*funcIter);
+	}
+
+	// Process until live set is empty.
+	while (!liveSet.empty())
+	{
+		GlslFunction* curFunction = liveSet.back();
+		liveSet.pop_back();
+
+		dst.push_back(curFunction);
+
+		// Decrement use counts and add to live set if reaches zero.
+		std::set<std::string> calledNames = curFunction->getCalledFunctions();
+		for (std::set<std::string>::const_iterator callIter = calledNames.begin(); callIter != calledNames.end(); ++callIter)
+		{
+			int& useCount = useCounts[*callIter];
+			useCount -= 1;
+			if (useCount == 0)
+			{
+				GlslFunction* newLiveFunc = resolveFunctionByMangledName(src, *callIter);
+				if (!newLiveFunc)
+					return false; // Not found - why?
+				liveSet.push_back(newLiveFunc);
+			}
+		}
+	}
+
+	// If dependency graph contains cycles, some functions will never end up in live set and from there
+	// to sorted list. This checks if sort succeeded.
+	return dst.size() == src.size();
+}
 
 bool HlslLinker::buildFunctionLists(HlslCrossCompiler* comp, EShLanguage lang, const std::string& entryPoint, GlslFunction*& globalFunction, std::vector<GlslFunction*>& functionList, FunctionSet& calledFunctions, GlslFunction*& funcMain)
 {
@@ -711,12 +846,19 @@ bool HlslLinker::buildFunctionLists(HlslCrossCompiler* comp, EShLanguage lang, c
 		infoSink.info << "Failed to find entry function: '" << entryPoint <<"'\n";
 		return false;
 	}
-	
+
 	//add all the called functions to the list
-	calledFunctions.push_back (funcMain);
-	if (!addCalledFunctions (funcMain, calledFunctions, functionList))
+	std::vector<GlslFunction*> functionsToSort;
+	functionsToSort.push_back (funcMain);
+	if (!addCalledFunctions (funcMain, functionsToSort, functionList))
 		infoSink.info << "Failed to resolve all called functions in the " << kShaderTypeNames[lang] << " shader\n";
-	
+
+	if (!sortFunctionsTopologically (calledFunctions, functionsToSort))
+	{
+		infoSink.info << "Failed to sort functions topologically, shader may contain recursion\n";
+		return false;
+	}
+
 	return true;
 }
 
@@ -851,7 +993,7 @@ static void emitSymbolWithPad (std::stringstream& str, const std::string& ctor, 
 }
 
 
-static void emitSingleInputVariable (EShLanguage lang, const std::string& name, const std::string& ctor, EGlslSymbolType type, TPrecision prec, std::stringstream& attrib, std::stringstream& varying)
+static void emitSingleInputVariable (EShLanguage lang, ETargetVersion targetVersion, const std::string& name, const std::string& ctor, EGlslSymbolType type, TPrecision prec, std::stringstream& attrib, std::stringstream& varying)
 {
 	// vertex shader: emit custom attributes
 	if (lang == EShLangVertex && strncmp(name.c_str(), "gl_", 3) != 0)
@@ -867,13 +1009,13 @@ static void emitSingleInputVariable (EShLanguage lang, const std::string& name, 
 		if (type >= EgstBool && type <= EgstBool4)
 			typeOffset += 8;
 		
-		attrib << "attribute " << getTypeString((EGlslSymbolType)(type + typeOffset)) << " " << name << ";\n";
+		attrib << GetVertexInputQualifier(targetVersion) << " " << getGLSLPrecisiontring(prec) << getTypeString((EGlslSymbolType)(type + typeOffset)) << " " << name << ";\n";
 	}
 	
 	// fragment shader: emit varying
 	if (lang == EShLangFragment)
 	{
-		AddToVaryings (varying, prec, ctor, name);
+		AddFragmentInput(varying, targetVersion, prec, ctor, name);
 	}
 }
 	
@@ -913,30 +1055,23 @@ void HlslLinker::emitInputNonStructParam(GlslSymbol* sym, EShLanguage lang, bool
 		emitSymbolWithPad (preamble, ctor, name, pad);
 		preamble << ";\n";
 	}
-	
-	emitSingleInputVariable (lang, name, ctor, sym->getType(), sym->getPrecision(), attrib, varying);
+
+	if (!sym->outputSuppressedBy())
+		emitSingleInputVariable (lang, m_Target, name, ctor, sym->getType(), sym->getPrecision(), attrib, varying);
 }
 
 
-void HlslLinker::emitInputStructParam(GlslSymbol* sym, EShLanguage lang, std::stringstream& attrib, std::stringstream& varying, std::stringstream& preamble, std::stringstream& call)
+// This function calls itself recursively if it finds structs in structs.
+bool HlslLinker::emitInputStruct(const GlslStruct* str, std::string parentName, EShLanguage lang, std::stringstream& attrib, std::stringstream& varying, std::stringstream& preamble)
 {
-	GlslStruct* str = sym->getStruct();
-	assert(str);
-
-	// temporary variable for the struct
-	const std::string tempVar = "xlt_" + sym->getName();
-	preamble << "    " << str->getName() << " ";
-	preamble << tempVar <<";\n";
-	call << tempVar;
-	
 	// process struct members
 	const int elem = str->memberCount();
 	for (int jj=0; jj<elem; jj++)
 	{
-		const GlslStruct::StructMember &current = str->getMember(jj);
+		const StructMember &current = str->getMember(jj);
 		EAttribSemantic memberSem = parseAttributeSemantic (current.semantic);
 		
-		add_extension_from_semantic(memberSem, m_Extensions);
+		add_extension_from_semantic(memberSem, m_Target, m_Extensions);
 		
 		// if member of the struct is an array, we have to loop over all array elements
 		int arraySize = 1;
@@ -951,18 +1086,25 @@ void HlslLinker::emitInputStructParam(GlslSymbol* sym, EShLanguage lang, std::st
 		for (int idx = 0; idx < arraySize; ++idx)
 		{
 			int pad;
-			if (!getArgumentData2 (current.name, current.semantic, current.type,
-								  lang==EShLangVertex ? EClassAttrib : EClassVarIn, name, ctor, pad, idx))
+			if (!getArgumentData2 (&current, lang==EShLangVertex ? EClassAttrib : EClassVarIn, name, ctor, pad, isArray?idx:-1))
 			{
-				//should deal with fall through cases here
-				assert(0);
-				infoSink.info << "Unsupported type for struct element in shader entry parameter (";
-				infoSink.info << getTypeString(current.type) << ")\n";
-				continue;
+				const GlslStruct* subStruct = current.structType;
+				if (subStruct)
+				{
+					//should deal with fall through cases here
+					emitInputStruct(subStruct, parentName+current.name+std::string("."), lang, attrib, varying, preamble);
+					continue;
+				}
+				else
+				{
+					infoSink.info << "Unsupported type for struct element in shader entry parameter (";
+					infoSink.info << getTypeString(current.type) << ")\n";
+					return false;
+				}
 			}
-			
+
 			preamble << "    ";
-			preamble << tempVar << "." << current.name;
+			preamble << parentName << current.name;
 			
 			if (isArray)
 				preamble << "[" << idx << "]";
@@ -980,10 +1122,24 @@ void HlslLinker::emitInputStructParam(GlslSymbol* sym, EShLanguage lang, std::st
 				preamble << ";\n";
 			}
 
-			
-			emitSingleInputVariable (lang, name, ctor, current.type, current.precision, attrib, varying);
+			if (!current.outputSuppressedBy())
+				emitSingleInputVariable (lang, m_Target, name, ctor, current.type, current.precision, attrib, varying);
 		}
 	}
+	return true;
+}
+
+void HlslLinker::emitInputStructParam(GlslSymbol* sym, EShLanguage lang, std::stringstream& attrib, std::stringstream& varying, std::stringstream& preamble, std::stringstream& call)
+{
+	GlslStruct* str = sym->getStruct();
+	assert(str);
+
+	// temporary variable for the struct
+	const std::string tempVar = "xlt_" + sym->getName();
+	preamble << "    " << str->getName() << " ";
+	preamble << tempVar <<";\n";
+	call << tempVar;
+	emitInputStruct(str, "xlt_" + sym->getName() + ".", lang, attrib, varying, preamble);
 }
 
 
@@ -1005,13 +1161,26 @@ void HlslLinker::emitOutputNonStructParam(GlslSymbol* sym, EShLanguage lang, boo
 	if (sym->getQualifier() != EqtInOut)
 	{
 		preamble << "    ";
-		writeType (preamble, sym->getType(), NULL, usePrecision?sym->getPrecision():EbpUndefined);
+
+        // UNITY CUSTOM: for vprog output with position semantic - force highp
+        TPrecision prec = usePrecision ? sym->getPrecision() : EbpUndefined;
+        if(sym->hasSemantic() && usePrecision)
+        {
+            const char* str = sym->getSemantic().c_str();
+            int         len = sym->getSemantic().length();
+
+            extern bool IsPositionSemantics(const char* sem, int len);
+            if(IsPositionSemantics(str, len))
+                prec = EbpHigh;
+        }
+
+        writeType (preamble, sym->getType(), NULL,prec);
 		preamble << " xlt_" << sym->getName() << ";\n";                     
 	}
 	
 	// In vertex shader, add to varyings
 	if (lang == EShLangVertex)
-		AddToVaryings (varying, sym->getPrecision(), ctor, name);
+		AddVertexOutput (varying, m_Target, sym->getPrecision(), ctor, name);
 	
 	call << "xlt_" << sym->getName();
 	
@@ -1042,11 +1211,11 @@ void HlslLinker::emitOutputStructParam(GlslSymbol* sym, EShLanguage lang, bool u
 	const int elem = Struct->memberCount();
 	for (int ii=0; ii<elem; ii++)
 	{
-		const GlslStruct::StructMember &current = Struct->getMember(ii);
+		const StructMember &current = Struct->getMember(ii);
 		std::string name, ctor;
 		int pad;
 		
-		if (!getArgumentData2( current.name, current.semantic, current.type, lang==EShLangVertex ? EClassVarOut : EClassRes, name, ctor, pad, 0))
+		if (!getArgumentData2( &current, lang==EShLangVertex ? EClassVarOut : EClassRes, name, ctor, pad, -1))
 		{
 			//should deal with fall through cases here
 			assert(0);
@@ -1061,7 +1230,7 @@ void HlslLinker::emitOutputStructParam(GlslSymbol* sym, EShLanguage lang, bool u
 
 		// In vertex shader, add to varyings
 		if (lang == EShLangVertex)
-			AddToVaryings (varying, current.precision, ctor, name);
+			AddVertexOutput (varying, m_Target, current.precision, ctor, name);
 	}
 }
 
@@ -1093,6 +1262,11 @@ void HlslLinker::emitMainStart(const HlslCrossCompiler* compiler, const EGlslSym
 		if (emit_both)
 			preamble << "\n#endif" << std::endl;
 	}
+	std::string matrixInit = compiler->m_DeferredMatrixInit.str();
+	if (!matrixInit.empty())
+	{
+		preamble << matrixInit;
+	}
 	
 	if (retType == EgstStruct)
 	{
@@ -1114,7 +1288,7 @@ bool HlslLinker::emitReturnStruct(GlslStruct *retStruct, std::string parentName,
 	const int elem = retStruct->memberCount();
 	for (int ii=0; ii<elem; ii++)
 	{
-		const GlslStruct::StructMember &current = retStruct->getMember(ii);
+		const StructMember &current = retStruct->getMember(ii);
 		std::string name, ctor;
 		int pad;
 		int arraySize = 1;
@@ -1132,7 +1306,7 @@ bool HlslLinker::emitReturnStruct(GlslStruct *retStruct, std::string parentName,
 
 		for (int idx = 0; idx < arraySize; ++idx)
 		{
-			if (!getArgumentData2( current.name, current.semantic, current.type, lang==EShLangVertex ? EClassVarOut : EClassRes, name, ctor, pad, idx))
+			if (!getArgumentData2( &current, lang==EShLangVertex ? EClassVarOut : EClassRes, name, ctor, pad, isArray?idx:-1))
 			{
 				GlslStruct *subStruct = current.structType;
 				if (subStruct)
@@ -1166,7 +1340,7 @@ bool HlslLinker::emitReturnStruct(GlslStruct *retStruct, std::string parentName,
 
 				// In vertex shader, add to varyings
 				if (lang == EShLangVertex)
-					AddToVaryings (varying, current.precision, ctor, name);
+					AddVertexOutput (varying, m_Target, current.precision, ctor, name);
 			}
 		}
 	}
@@ -1193,8 +1367,10 @@ bool HlslLinker::emitReturnValue(const EGlslSymbolType retType, GlslFunction* fu
 		std::string name, ctor;
 		int pad;
 		
-		if (!getArgumentData2("", funcMain->getSemantic(), retType, lang==EShLangVertex ? EClassVarOut : EClassRes,
-							  name, ctor, pad, 0))
+		GlslSymbolOrStructMemberBase fakedMainSym("", funcMain->getSemantic(), retType, EqtNone, EbpMedium, 0);
+
+		if (!getArgumentData2(&fakedMainSym, lang==EShLangVertex ? EClassVarOut : EClassRes,
+								name, ctor, pad, -1))
 		{
 			assert(0);
 			infoSink.info << (lang==EShLangVertex ? "Unsupported type for shader return value (" : "Unsupported return type for shader entry function (");
@@ -1209,8 +1385,7 @@ bool HlslLinker::emitReturnValue(const EGlslSymbolType retType, GlslFunction* fu
 		
 		// In vertex shader, add to varyings
 		if (lang == EShLangVertex)
-			AddToVaryings (varying, funcMain->getPrecision(), ctor, name);
-		
+			AddToVaryings (varying, lang, m_Target, funcMain->getPrecision(), ctor, name);
 		return true;
 	}
 	
@@ -1221,10 +1396,65 @@ bool HlslLinker::emitReturnValue(const EGlslSymbolType retType, GlslFunction* fu
 	return emitReturnStruct(retStruct, std::string("xl_retval."), lang, varying, postamble);
 }
 
+// Called recursively and appends (to list) any symbols that have semantic sem.
+void HlslLinker::appendDuplicatedInSemantics(GlslSymbolOrStructMemberBase* sym, EAttribSemantic sem, std::vector<GlslSymbolOrStructMemberBase*>& list)
+{
+	EGlslQualifier qual = sym->getQualifier();
+	// fields in structures in structures can have EqtNone as a qualifier.
+	if ( (qual == EqtIn || qual == EqtInOut || qual == EqtNone) && parseAttributeSemantic(sym->getSemantic()) == sem )
+		list.push_back(sym);
+	else if (sym->getStruct())
+	{
+		int mc = sym->getStruct()->memberCount();
+		for (int i = 0; i < mc; ++i)
+			appendDuplicatedInSemantics(const_cast<StructMember*>(&sym->getStruct()->getMember(i)),sem,list);
+	}
+}
+
+// For each re-used semantic (e.g. TEXCOORD0) record the symbol for which it is output.
+// This is so that you can specify the same semantic in multiple structures without
+// having multiply defined attribute or varying symbols in the output. The one that is
+// output is the one found with the largest dimension.
+void HlslLinker::markDuplicatedInSemantics(GlslFunction* func)
+{
+	int pCount = func->getParameterCount();
+	for (int ase = EAttrSemNone; ase < EAttrSemCount; ++ase)
+	{
+		std::vector<GlslSymbolOrStructMemberBase*> symsUsingSem;
+		for (int ii=0; ii<pCount; ii++)
+		{
+			GlslSymbol *sym = func->getParameter(ii);
+			appendDuplicatedInSemantics(sym, static_cast<EAttribSemantic>(ase), symsUsingSem);
+		}
+		if (symsUsingSem.size() > 1)
+		{
+			int index_of_largest = -1;
+			int largest_array_size = 0;
+			GlslSymbolOrStructMemberBase* sym_of_largest = 0;
+			for (unsigned int ii=0; ii < symsUsingSem.size(); ii++)
+			{
+				if (!ii || largest_array_size < getElements(symsUsingSem[ii]->type))
+				{
+					index_of_largest = ii;
+					sym_of_largest = symsUsingSem[ii];
+					largest_array_size = getElements(symsUsingSem[ii]->type);
+				}
+			}
+			for (unsigned int ii=0; ii < symsUsingSem.size(); ii++)
+			{
+				if (ii != index_of_largest)
+				{
+					symsUsingSem[ii]->suppressOutput(sym_of_largest);
+				}
+			}
+		}
+	}
+}
 
 bool HlslLinker::link(HlslCrossCompiler* compiler, const char* entryFunc, ETargetVersion targetVersion, unsigned options)
 {
 	m_Target = targetVersion;
+	m_Options = options;
 	m_Extensions.clear();
 	if (!linkerSanityCheck(compiler, entryFunc))
 		return false;
@@ -1249,6 +1479,10 @@ bool HlslLinker::link(HlslCrossCompiler* compiler, const char* entryFunc, ETarge
 	std::vector<GlslSymbol*> constants;
 	std::set<TOperator> libFunctions;
 	buildUniformsAndLibFunctions(calledFunctions, constants, libFunctions);
+	// add built-in functions possibly used by uniform initializers
+	const std::set<TOperator>& referencedGlobalFunctions = globalFunction->getLibFunctions();
+	libFunctions.insert (referencedGlobalFunctions.begin(), referencedGlobalFunctions.end());
+	
 	buildUniformReflection (constants);
 
 
@@ -1271,9 +1505,11 @@ bool HlslLinker::link(HlslCrossCompiler* compiler, const char* entryFunc, ETarge
 	std::stringstream varying;
 	std::stringstream call;
 
+	markDuplicatedInSemantics(funcMain);
+
 	// Declare return value
 	const EGlslSymbolType retType = funcMain->getReturnType();
-	emitMainStart(compiler, retType, funcMain, options, usePrecision, preamble, constants);
+	emitMainStart(compiler, retType, funcMain, m_Options, usePrecision, preamble, constants);
 	
 
 	// Call the entry point
@@ -1290,7 +1526,7 @@ bool HlslLinker::link(HlslCrossCompiler* compiler, const char* entryFunc, ETarge
 		GlslSymbol *sym = funcMain->getParameter(ii);
 		EAttribSemantic attrSem = parseAttributeSemantic( sym->getSemantic());
 		
-		add_extension_from_semantic(attrSem, m_Extensions);
+		add_extension_from_semantic(attrSem, m_Target, m_Extensions);
 
 		switch (sym->getQualifier())
 		{

@@ -57,7 +57,8 @@ private:
 	EAttribSemantic parseAttributeSemantic(const std::string &semantic);
 	
 	bool addCalledFunctions( GlslFunction *func, FunctionSet& funcSet, std::vector<GlslFunction*> &funcList);
-	bool getArgumentData2( const std::string &name, const std::string &semantic, EGlslSymbolType type,
+	void getAttributeName( GlslSymbolOrStructMemberBase const* symOrStructMember, std::string &outName, EAttribSemantic sem, int semanticOffset);
+	bool getArgumentData2( GlslSymbolOrStructMemberBase const* symOrStructMember,
 							   EClassifier c, std::string &outName, std::string &ctor, int &pad, int semanticOffset);
 	bool getArgumentData( GlslSymbol* sym, EClassifier c, std::string &outName,
 				  std::string &ctor, int &pad);
@@ -67,11 +68,15 @@ private:
 	void buildUniformsAndLibFunctions(const FunctionSet& calledFunctions, std::vector<GlslSymbol*>& constants, std::set<TOperator>& libFunctions);
 	void buildUniformReflection(const std::vector<GlslSymbol*>& constants);
 	
+	void appendDuplicatedInSemantics(GlslSymbolOrStructMemberBase* sym, EAttribSemantic sem, std::vector<GlslSymbolOrStructMemberBase*>& list);
+	void markDuplicatedInSemantics(GlslFunction* func);
+
 	void emitLibraryFunctions(const std::set<TOperator>& libFunctions, EShLanguage lang, bool usePrecision);
 	void emitStructs(HlslCrossCompiler* comp);
 	void emitGlobals(const GlslFunction* globalFunction, const std::vector<GlslSymbol*>& constants);
 	
 	void emitInputNonStructParam(GlslSymbol* sym, EShLanguage lang, bool usePrecision, EAttribSemantic attrSem, std::stringstream& attrib, std::stringstream& varying, std::stringstream& preamble, std::stringstream& call);
+	bool emitInputStruct(const GlslStruct* str, std::string parentName, EShLanguage lang, std::stringstream& attrib, std::stringstream& varying, std::stringstream& preamble);
 	void emitInputStructParam(GlslSymbol* sym, EShLanguage lang, std::stringstream& attrib, std::stringstream& varying, std::stringstream& preamble, std::stringstream& call);
 	void emitOutputNonStructParam(GlslSymbol* sym, EShLanguage lang, bool usePrecision, EAttribSemantic attrSem, std::stringstream& varying, std::stringstream& preamble, std::stringstream& postamble, std::stringstream& call);
 	void emitOutputStructParam(GlslSymbol* sym, EShLanguage lang, bool usePrecision, EAttribSemantic attrSem, std::stringstream& varying, std::stringstream& preamble, std::stringstream& postamble, std::stringstream& call);
@@ -103,6 +108,7 @@ private:
 	
 	ExtensionSet m_Extensions;
 	ETargetVersion m_Target;
+	unsigned m_Options;
 };
 
 #endif //HLSL_LINKER_H

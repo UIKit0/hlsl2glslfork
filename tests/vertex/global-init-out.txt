@@ -6,8 +6,6 @@ uniform vec4 unusedVar;
 uniform float uninitializedVar;
 #line 7
 #line 12
-float test(  );
-vec4 xlat_main(  );
 #line 7
 float test(  ) {
     return (((staticVar.x * 2.0) + uninitializedVar) + staticVar2.y);
@@ -18,6 +16,8 @@ vec4 xlat_main(  ) {
     return tempVar;
 }
 void main() {
+staticVar = uniVar;
+staticVar2 = staticVar;
     vec4 xl_retval;
     xl_retval = xlat_main( );
     gl_Position = vec4(xl_retval);

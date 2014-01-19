@@ -117,12 +117,6 @@ TSymbolTable SymbolTables[EShLangCount];
 // Global pool allocator (per process)
 TPoolAllocator* PerProcessGPA = 0;
 
-///ACS: added fixedTargetVersion
-///     * If left as default (ETargetVersionCount) Hlsl2Glsl operates as normal
-///     * If set, only Hlsl2Glsl_Translate calls of matching target will work, and 
-///       when set to higher than ETargetGLSL_120, will emit non-deprecated-after-120
-///       texture lookup calls e.g. texture() & textureLod() instead of texture2D() & textureCubeLod()
-ETargetVersion FixedTargetVersion = ETargetVersionCount;
 
 /// Initializize the symbol table
 /// \param BuiltInStrings
@@ -230,15 +224,12 @@ static bool GenerateBuiltInSymbolTable(TInfoSink& infoSink, TSymbolTable* symbol
 }
 
 
-
-int C_DECL Hlsl2Glsl_Initialize(ETargetVersion fixedTargetVersion /*= ETargetVersionCount*/)
+int C_DECL Hlsl2Glsl_Initialize()
 {
    TInfoSink infoSink;
 
    if (!InitProcess())
       return 0;
-
-   FixedTargetVersion = fixedTargetVersion; 
 
    if (!PerProcessGPA)
    {
@@ -262,8 +253,6 @@ int C_DECL Hlsl2Glsl_Initialize(ETargetVersion fixedTargetVersion /*= ETargetVer
       symTables[EShLangVertex].pop();
       symTables[EShLangFragment].pop();
 
-      initializeHLSLSupportLibrary(FixedTargetVersion);
-
       builtInPoolAllocator->popAll();
       delete builtInPoolAllocator;        
 
@@ -285,7 +274,6 @@ void C_DECL Hlsl2Glsl_Shutdown()
 		PerProcessGPA->popAll();
 		delete PerProcessGPA;
 		PerProcessGPA = NULL;
-		finalizeHLSLSupportLibrary();
 	}
 	
 	DetachThread();
@@ -378,11 +366,16 @@ int C_DECL Hlsl2Glsl_Parse(
    }
    else if (!success)
    {
-      parseContext.infoSink.info.prefix(EPrefixError);
-      parseContext.infoSink.info << parseContext.numErrors << " compilation errors.  No code generated.\n\n";
-      success = false;
-	  if (options & ETranslateOpIntermediate)
-         ir_output_tree(parseContext.treeRoot, parseContext.infoSink);
+		// only add "X compilation errors" message if somehow there are no other errors whatsoever, yet
+		// we still failed. for some reason.
+		if (parseContext.infoSink.info.IsEmpty())
+		{
+			parseContext.infoSink.info.prefix(EPrefixError);
+			parseContext.infoSink.info << parseContext.numErrors << " compilation errors.  No code generated.\n\n";
+		}
+		success = false;
+		if (options & ETranslateOpIntermediate)
+			ir_output_tree(parseContext.treeRoot, parseContext.infoSink);
    }
 
 	ir_remove_tree(parseContext.treeRoot);
@@ -416,13 +409,8 @@ int C_DECL Hlsl2Glsl_Translate(
    HlslCrossCompiler* compiler = handle;
    compiler->infoSink.info.erase();
 
-   //ACS: added FixedTargetVersion
-   if (FixedTargetVersion!=ETargetVersionCount) {
-       if(targetVersion!=FixedTargetVersion) {
-           compiler->infoSink.info.message(EPrefixError, "Hlsl2Glsl was initialized with fixed target. Requested target does not match.");
-           return 0;
-       }
-   }
+   // \todo [2013-05-14 pyry] Maintain different support library per target version.
+   initializeHLSLSupportLibrary(targetVersion);
 
 	if (!compiler->IsASTTransformed() || !compiler->IsGlslProduced())
 	{
@@ -431,6 +419,8 @@ int C_DECL Hlsl2Glsl_Translate(
 	}
 
    bool ret = compiler->GetLinker()->link(compiler, entry, targetVersion, options);
+
+   finalizeHLSLSupportLibrary();
 
    return ret ? 1 : 0;
 }
@@ -515,6 +505,7 @@ static bool kVersionUsesPrecision[ETargetVersionCount] = {
 	false,	// 1.10
 	false,	// 1.20
     false,	// 1.40
+	true,	// ES 3.0
 };
 
 bool C_DECL Hlsl2Glsl_VersionUsesPrecision (ETargetVersion version)

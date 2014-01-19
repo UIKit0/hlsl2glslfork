@@ -30,6 +30,7 @@ Jutta Degener, 1995
     #define YYPARSE_PARAM_DECL TParseContext&
     #define YY_DECL int yylex(YYSTYPE* pyylval, TParseContext& parseContext)
     #define YYLEX_PARAM parseContext
+	void yyerror(const char*);
 #else
     #define YYPARSE_PARAM parseContextLocal
     #define parseContext (*((TParseContext*)(parseContextLocal)))
@@ -375,18 +376,22 @@ postfix_expression
             TVectorFields fields;
 
             // Check to make sure only the "x" component is accessed.
-            if (! parseContext.parseVectorFields(*$3.string, 1, fields, $3.line)) {
+            if (! parseContext.parseVectorFields(*$3.string, 1, fields, $3.line))
+			{
                 fields.num = 1;
                 fields.offsets[0] = 0;
                 parseContext.recover();
+				$$ = $1;
             }
-
-            // Create the appropriate constructor based on the number of ".x"'s there are in the selection field
-            TString vectorString = *$3.string;
-            TQualifier qualifier = $1->getType().getQualifier() == EvqConst ? EvqConst : EvqTemporary;
-            TType type($1->getBasicType(), $1->getPrecision(), qualifier, 1, (int) vectorString.size());
-            $$ = parseContext.constructBuiltIn(&type, parseContext.getConstructorOp(type),
-                                               $$, $1->getLine(), false);
+			else
+			{
+				// Create the appropriate constructor based on the number of ".x"'s there are in the selection field
+				TString vectorString = *$3.string;
+				TQualifier qualifier = $1->getType().getQualifier() == EvqConst ? EvqConst : EvqTemporary;
+				TType type($1->getBasicType(), $1->getPrecision(), qualifier, 1, (int) vectorString.size());
+				$$ = parseContext.constructBuiltIn(&type, parseContext.getConstructorOp(type),
+												   $$, $1->getLine(), false);
+			}
         } else {
             parseContext.error($2.line, " field selection requires structure, vector, or matrix on left hand side", $3.string->c_str(), "");
             parseContext.recover();
@@ -999,8 +1004,15 @@ function_header_with_parameters
 function_header
     : fully_specified_type IDENTIFIER LEFT_PAREN {
         if ($1.qualifier != EvqGlobal && $1.qualifier != EvqTemporary) {
-            parseContext.error($2.line, "no qualifiers allowed for function return", getQualifierString($1.qualifier), "");
-            parseContext.recover();
+			if ($1.qualifier == EvqConst || $1.qualifier == EvqStatic)
+			{
+				$1.qualifier = EvqTemporary;
+			}
+			else
+			{
+				parseContext.error($2.line, "no qualifiers allowed for function return", getQualifierString($1.qualifier), "");
+				parseContext.recover();
+			}
         }
         // make sure a sampler is not involved as well...
         if (parseContext.structQualifierErrorCheck($2.line, $1))
@@ -1539,6 +1551,9 @@ type_qualifier
     | STATIC_QUAL CONST_QUAL {
         $$.setBasic(EbtVoid, EvqConst, $1.line); // same as "const" really
     }
+    | CONST_QUAL STATIC_QUAL {
+        $$.setBasic(EbtVoid, EvqConst, $1.line); // same as "const" really
+    }
     | UNIFORM {
         if (parseContext.globalErrorCheck($1.line, parseContext.symbolTable.atGlobalLevel(), "uniform"))
             parseContext.recover();
@@ -1836,13 +1851,13 @@ type_specifier_nonarray
         SET_BASIC_TYPE($$,$1,EbtSamplerRect,EbpUndefined);
     }
     | SAMPLERRECTSHADOW {
-        SET_BASIC_TYPE($$,$1,EbtSamplerRectShadow,EbpUndefined);
+        SET_BASIC_TYPE($$,$1,EbtSamplerRectShadow,EbpLow); // ES3 doesn't have default precision for shadow samplers, so always emit lowp
     } 
     | SAMPLER1DSHADOW {
-        SET_BASIC_TYPE($$,$1,EbtSampler1DShadow,EbpUndefined);
+        SET_BASIC_TYPE($$,$1,EbtSampler1DShadow,EbpLow); // ES3 doesn't have default precision for shadow samplers, so always emit lowp
     } 
     | SAMPLER2DSHADOW {
-        SET_BASIC_TYPE($$,$1,EbtSampler2DShadow,EbpUndefined);
+        SET_BASIC_TYPE($$,$1,EbtSampler2DShadow,EbpLow); // ES3 doesn't have default precision for shadow samplers, so always emit lowp
     }     
     | struct_specifier {
         $$ = $1;

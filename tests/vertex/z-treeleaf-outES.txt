@@ -1,6 +1,6 @@
-vec2 xll_matrixindex (mat2 m, int i) { vec2 v; v.x=m[0][i]; v.y=m[1][i]; return v; }
-vec3 xll_matrixindex (mat3 m, int i) { vec3 v; v.x=m[0][i]; v.y=m[1][i]; v.z=m[2][i]; return v; }
-vec4 xll_matrixindex (mat4 m, int i) { vec4 v; v.x=m[0][i]; v.y=m[1][i]; v.z=m[2][i]; v.w=m[3][i]; return v; }
+vec2 xll_matrixindex_mf2x2_i (mat2 m, int i) { vec2 v; v.x=m[0][i]; v.y=m[1][i]; return v; }
+vec3 xll_matrixindex_mf3x3_i (mat3 m, int i) { vec3 v; v.x=m[0][i]; v.y=m[1][i]; v.z=m[2][i]; return v; }
+vec4 xll_matrixindex_mf4x4_i (mat4 m, int i) { vec4 v; v.x=m[0][i]; v.y=m[1][i]; v.z=m[2][i]; v.w=m[3][i]; return v; }
 #line 10
 struct appdata_full {
     highp vec4 vertex;
@@ -51,44 +51,25 @@ uniform mediump float _TranslucencyViewDependency;
 uniform mediump float _ShadowStrength;
 #line 115
 uniform highp vec4 _MainTex_ST;
-highp vec4 Squash( in highp vec4 pos );
-void ExpandBillboard( in highp mat4 mat, inout highp vec4 pos, inout highp vec3 normal, inout highp vec4 tangent );
-highp vec4 TriangleWave( in highp vec4 x );
-highp vec4 SmoothCurve( in highp vec4 x );
-highp vec4 SmoothTriangleWave( in highp vec4 x );
-highp vec4 AnimateVertex( in highp vec4 pos, in highp vec3 normal, in highp vec4 animParams );
-void TreeVertLeaf( inout appdata_full v );
-highp vec3 ObjSpaceViewDir( in highp vec4 v );
-highp vec3 ObjSpaceLightDir( in highp vec4 v );
-v2f_surf xlat_main( in appdata_full v );
-#line 45
-highp vec4 Squash( in highp vec4 pos ) {
-    #line 47
-    highp vec3 planeNormal = _SquashPlaneNormal.xyz;
-    highp vec3 projectedVertex = (pos.xyz - ((dot( planeNormal, vec3( pos)) + _SquashPlaneNormal.w) * planeNormal));
-    pos = vec4( mix( projectedVertex, pos.xyz, vec3( _SquashAmount)), 1.0);
-    return pos;
+#line 20
+highp vec3 ObjSpaceLightDir( in highp vec4 v ) {
+    highp vec3 objSpaceLightPos = (_World2Object * _WorldSpaceLightPos0).xyz;
+    return objSpaceLightPos.xyz;
 }
-#line 53
-void ExpandBillboard( in highp mat4 mat, inout highp vec4 pos, inout highp vec3 normal, inout highp vec4 tangent ) {
-    highp float isBillboard = (1.0 - abs(tangent.w));
-    #line 56
-    highp vec3 norb = vec3( normalize((vec4( normal, 0.0) * mat)));
-    highp vec3 tanb = vec3( normalize((vec4( tangent.xyz, 0.0) * mat)));
-    pos += ((vec4( normal.xy, 0.0, 0.0) * mat) * isBillboard);
-    normal = mix( normal, norb, vec3( isBillboard));
-    #line 60
-    tangent = mix( tangent, vec4( tanb, -1.0), vec4( isBillboard));
-}
-#line 66
-highp vec4 TriangleWave( in highp vec4 x ) {
-    #line 68
-    return abs(((fract((x + 0.5)) * 2.0) - 1.0));
+#line 25
+highp vec3 ObjSpaceViewDir( in highp vec4 v ) {
+    highp vec3 objSpaceCameraPos = ((_World2Object * vec4( _WorldSpaceCameraPos.xyz, 1.0)).xyz * unity_Scale.w);
+    return (objSpaceCameraPos - v.xyz);
 }
 #line 62
 highp vec4 SmoothCurve( in highp vec4 x ) {
     #line 64
     return ((x * x) * (3.0 - (2.0 * x)));
+}
+#line 66
+highp vec4 TriangleWave( in highp vec4 x ) {
+    #line 68
+    return abs(((fract((x + 0.5)) * 2.0) - 1.0));
 }
 #line 70
 highp vec4 SmoothTriangleWave( in highp vec4 x ) {
@@ -100,7 +81,7 @@ highp vec4 AnimateVertex( in highp vec4 pos, in highp vec3 normal, in highp vec4
     #line 76
     highp float fDetailAmp = 0.1;
     highp float fBranchAmp = 0.3;
-    highp float fObjPhase = dot( xll_matrixindex (_Object2World, 3).xyz, vec3( 1.0));
+    highp float fObjPhase = dot( xll_matrixindex_mf4x4_i (_Object2World, 3).xyz, vec3( 1.0));
     highp float fBranchPhase = (fObjPhase + animParams.x);
     #line 80
     highp float fVtxPhase = dot( pos.xyz, vec3( (animParams.y + fBranchPhase)));
@@ -116,6 +97,25 @@ highp vec4 AnimateVertex( in highp vec4 pos, in highp vec3 normal, in highp vec4
     pos.xyz += (animParams.z * _Wind.xyz);
     return pos;
 }
+#line 53
+void ExpandBillboard( in highp mat4 mat, inout highp vec4 pos, inout highp vec3 normal, inout highp vec4 tangent ) {
+    highp float isBillboard = (1.0 - abs(tangent.w));
+    #line 56
+    highp vec3 norb = vec3( normalize((vec4( normal, 0.0) * mat)));
+    highp vec3 tanb = vec3( normalize((vec4( tangent.xyz, 0.0) * mat)));
+    pos += ((vec4( normal.xy, 0.0, 0.0) * mat) * isBillboard);
+    normal = mix( normal, norb, vec3( isBillboard));
+    #line 60
+    tangent = mix( tangent, vec4( tanb, -1.0), vec4( isBillboard));
+}
+#line 45
+highp vec4 Squash( in highp vec4 pos ) {
+    #line 47
+    highp vec3 planeNormal = _SquashPlaneNormal.xyz;
+    highp vec3 projectedVertex = (pos.xyz - ((dot( planeNormal, vec3( pos)) + _SquashPlaneNormal.w) * planeNormal));
+    pos = vec4( mix( projectedVertex, pos.xyz, vec3( _SquashAmount)), 1.0);
+    return pos;
+}
 #line 91
 void TreeVertLeaf( inout appdata_full v ) {
     #line 93
@@ -127,16 +127,6 @@ void TreeVertLeaf( inout appdata_full v ) {
     v.color = vec4( 1.0, 1.0, 1.0, v.color.w);
     v.normal = normalize(v.normal);
     v.tangent.xyz = normalize(v.tangent.xyz);
-}
-#line 25
-highp vec3 ObjSpaceViewDir( in highp vec4 v ) {
-    highp vec3 objSpaceCameraPos = ((_World2Object * vec4( _WorldSpaceCameraPos.xyz, 1.0)).xyz * unity_Scale.w);
-    return (objSpaceCameraPos - v.xyz);
-}
-#line 20
-highp vec3 ObjSpaceLightDir( in highp vec4 v ) {
-    highp vec3 objSpaceLightPos = (_World2Object * _WorldSpaceLightPos0).xyz;
-    return objSpaceLightPos.xyz;
 }
 #line 116
 v2f_surf xlat_main( in appdata_full v ) {
@@ -155,7 +145,12 @@ v2f_surf xlat_main( in appdata_full v ) {
     o._LightCoord = (_LightMatrix0 * (_Object2World * v.vertex)).xy;
     return o;
 }
-attribute vec4 TANGENT;
+attribute highp vec4 xlat_attrib_POSITION;
+attribute highp vec4 TANGENT;
+attribute highp vec3 xlat_attrib_NORMAL;
+attribute highp vec4 xlat_attrib_TEXCOORD0;
+attribute highp vec4 xlat_attrib_TEXCOORD1;
+attribute highp vec4 xlat_attrib_COLOR;
 varying highp vec2 xlv_TEXCOORD0;
 varying highp vec4 xlv_COLOR0;
 varying highp vec3 xlv_TEXCOORD1;
@@ -164,12 +159,12 @@ varying highp vec2 xlv_TEXCOORD3;
 void main() {
     v2f_surf xl_retval;
     appdata_full xlt_v;
-    xlt_v.vertex = vec4(gl_Vertex);
+    xlt_v.vertex = vec4(xlat_attrib_POSITION);
     xlt_v.tangent = vec4(TANGENT);
-    xlt_v.normal = vec3(gl_Normal);
-    xlt_v.texcoord = vec4(gl_MultiTexCoord0);
-    xlt_v.texcoord1 = vec4(gl_MultiTexCoord1);
-    xlt_v.color = vec4(gl_Color);
+    xlt_v.normal = vec3(xlat_attrib_NORMAL);
+    xlt_v.texcoord = vec4(xlat_attrib_TEXCOORD0);
+    xlt_v.texcoord1 = vec4(xlat_attrib_TEXCOORD1);
+    xlt_v.color = vec4(xlat_attrib_COLOR);
     xl_retval = xlat_main( xlt_v);
     gl_Position = vec4(xl_retval.pos);
     xlv_TEXCOORD0 = vec2(xl_retval.hip_pack0);

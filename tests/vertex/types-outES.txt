@@ -23,7 +23,6 @@ uniform lowp mat4 fmat4;
 uniform lowp mat3 fmat3;
 uniform lowp mat2 fmat2;
 #line 23
-v2f xlat_main( in a2v v );
 #line 23
 v2f xlat_main( in a2v v ) {
     v2f o;
@@ -50,16 +49,20 @@ v2f xlat_main( in a2v v ) {
     #line 44
     return o;
 }
+attribute highp vec4 xlat_attrib_POSITION;
+attribute highp vec2 xlat_attrib_TEXCOORD0;
+attribute mediump vec3 xlat_attrib_NORMAL;
+attribute lowp vec4 xlat_attrib_COLOR;
 varying highp float xlv_FOG;
 varying highp vec2 xlv_TEXCOORD0;
 varying highp vec4 xlv_COLOR;
 void main() {
     v2f xl_retval;
     a2v xlt_v;
-    xlt_v.pos = vec4(gl_Vertex);
-    xlt_v.uv = vec2(gl_MultiTexCoord0);
-    xlt_v.normal = vec3(gl_Normal);
-    xlt_v.color = vec4(gl_Color);
+    xlt_v.pos = vec4(xlat_attrib_POSITION);
+    xlt_v.uv = vec2(xlat_attrib_TEXCOORD0);
+    xlt_v.normal = vec3(xlat_attrib_NORMAL);
+    xlt_v.color = vec4(xlat_attrib_COLOR);
     xl_retval = xlat_main( xlt_v);
     gl_Position = vec4(xl_retval.pos);
     xlv_FOG = float(xl_retval.fog);

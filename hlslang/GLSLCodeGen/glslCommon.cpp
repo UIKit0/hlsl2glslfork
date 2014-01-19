@@ -205,3 +205,68 @@ EGlslQualifier translateQualifier( TQualifier qual )
    default: return EqtNone;
    }
 }
+
+
+// we want to enforce position semantic to have highp precision
+// otherwise, if we encounter shader compiler (e.g. mali) that treats prec hints as "force precision"
+// we will have problems with outputing half4 to gl_Position, effectively breaking lots of stuf due to prec loss
+// we do it in a bit strange way because i am a bit lazy to go through all code to make sure that we have lower-case string in there
+bool IsPositionSemantics(const char* sem, int len)
+{
+   bool isPos = false;
+
+   char* str = (char*)::malloc(len+1);
+
+   for(int i = 0 ; i <= len ; ++i)
+       str[i] = ::tolower(sem[i]);
+
+   if(::strstr(str, "position"))
+       isPos = true;
+
+   ::free(str);
+   return isPos;
+}
+
+
+int getElements( EGlslSymbolType t )
+{
+	switch (t)
+	{
+	case EgstBool:
+	case EgstInt:
+	case EgstFloat:
+	case EgstStruct:
+		return 1;
+	case EgstBool2:
+	case EgstInt2:
+	case EgstFloat2:
+		return 2;
+	case EgstBool3:
+	case EgstInt3:
+	case EgstFloat3:
+		return 3;
+	case EgstBool4:
+	case EgstInt4:
+	case EgstFloat4:
+	case EgstFloat2x2:
+		return 4;
+	case EgstFloat2x3:
+		return 6;
+	case EgstFloat2x4:
+		return 8;
+	case EgstFloat3x2:
+		return 6;
+	case EgstFloat3x3:
+		return 9;
+	case EgstFloat3x4:
+		return 12;
+	case EgstFloat4x2:
+		return 8;
+	case EgstFloat4x3:
+		return 12;
+	case EgstFloat4x4:
+		return 16;
+	default:
+		return 0;
+	}
+}
